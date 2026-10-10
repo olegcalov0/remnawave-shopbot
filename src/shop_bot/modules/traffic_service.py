@@ -101,6 +101,19 @@ def calculate_price(*, host_name: str, traffic_type: str, gb_amount: int,
     if not host:
         raise TrafficPurchaseError("host not found")
 
+    # границы хоста: общие для сгораемых и несгораемых (требование владельца)
+    host_min = int(host.get("traffic_purchase_min_gb") or GB_MIN)
+    host_max = int(host.get("traffic_purchase_max_gb") or GB_MAX)
+    if host_min < 1:
+        host_min = 1
+    if host_max > GB_MAX:
+        host_max = GB_MAX
+    if host_min > host_max:
+        host_min, host_max = host_max, host_min
+    if not (host_min <= gb <= host_max):
+        raise TrafficPurchaseError(
+            f"для этого сервера доступно от {host_min} до {host_max} ГБ")
+
     if package:
         if package.get("traffic_type") != traffic_type or package.get("host_name") != host_name:
             raise TrafficPurchaseError("package mismatch")

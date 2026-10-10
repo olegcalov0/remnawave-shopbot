@@ -44,6 +44,7 @@ HOST_HYBRID_FIELDS = (
     "wifi_burnable_price_per_gb", "wifi_non_burnable_price_per_gb",
     "lte_burnable_price_per_gb", "lte_non_burnable_price_per_gb",
     "low_traffic_threshold_percent",
+    "traffic_purchase_min_gb", "traffic_purchase_max_gb",
 )
 
 
@@ -55,7 +56,8 @@ def get_host_hybrid_settings(host_name: str) -> dict | None:
             "wifi_traffic_name, lte_traffic_name, "
             "wifi_burnable_price_per_gb, wifi_non_burnable_price_per_gb, "
             "lte_burnable_price_per_gb, lte_non_burnable_price_per_gb, "
-            "low_traffic_threshold_percent, is_active "
+            "low_traffic_threshold_percent, traffic_purchase_min_gb, traffic_purchase_max_gb, "
+            "is_active "
             "FROM xui_hosts WHERE TRIM(host_name) = TRIM(?)",
             (host_name,),
         ).fetchone()
@@ -424,6 +426,17 @@ def increment_purchase_attempt(payment_id: str, error: str) -> bool:
             (error, payment_id))
         conn.commit()
         return True
+
+
+def cancel_purchase_refunded(payment_id: str, *, reason: str) -> bool:
+    """Перевод purchase в cancelled (возврат средств). Идемпотентен."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE traffic_purchases SET status = 'cancelled', last_sync_error = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE payment_id = ? AND status NOT IN ('fulfilled', 'cancelled')",
+            (reason, payment_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def list_purchases_for_key(key_id: int) -> list[dict]:

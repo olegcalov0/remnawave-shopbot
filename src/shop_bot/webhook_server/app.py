@@ -3337,6 +3337,17 @@ def create_webhook_app(bot_controller_instance):
             if not (1 <= thr <= 99):
                 return jsonify({'ok': False, 'error': 'порог 1-99%'}), 400
             values['low_traffic_threshold_percent'] = thr
+            # границы объёма докупки (общие для сгораемых/несгораемых)
+            min_gb = int(request.form.get('traffic_purchase_min_gb') or 1)
+            max_gb = int(request.form.get('traffic_purchase_max_gb') or 1000)
+            if not (1 <= min_gb <= 1000):
+                return jsonify({'ok': False, 'error': 'минимум ГБ: 1-1000'}), 400
+            if not (1 <= max_gb <= 1000):
+                return jsonify({'ok': False, 'error': 'максимум ГБ: 1-1000'}), 400
+            if min_gb > max_gb:
+                return jsonify({'ok': False, 'error': 'минимум не может быть больше максимума'}), 400
+            values['traffic_purchase_min_gb'] = min_gb
+            values['traffic_purchase_max_gb'] = max_gb
 
             # валидация suffix при включённом гибриде
             if int(values.get('hybrid_enabled', 0)) == 1:

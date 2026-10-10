@@ -2213,7 +2213,38 @@ def get_user_router() -> Router:
 
             # 2. Фоновое обновление (API)
             details, sub = await asyncio.gather(remnawave_api.get_key_details_from_host(key_data), remnawave_api.get_subscription_info(key_data['remnawave_user_uuid'], host_name=key_data.get('host_name')) if key_data.get('remnawave_user_uuid') else asyncio.sleep(0, None))
-            
+
+            # Идентификация: сверка panel user id с локальной записью.
+            # Защита от выдачи ключа другому пользователю при рассинхроне
+            # (требование владельца: идентификация по panel id)
+            remote_panel_id = str(((details or {}).get('user') or {}).get('id') or '')
+            _stored_panel_id = str(key_data.get('remnawave_user_uuid') or '')
+            _identity_mismatch = bool(remote_panel_id and _stored_panel_id
+                                      and remote_panel_id != _stored_panel_id
+                                      and remote_panel_id.isdigit() and _stored_panel_id.isdigit())
+            if _identity_mismatch:
+                logger.error(
+                    "IDENTITY MISMATCH: key_id=%s user=%s — хранится panel id %s, панель вернула %s. "
+                    "Ключ помечен manual_review, пользователю ключ не показывается.",
+                    key_id, key_data.get('user_id'), _stored_panel_id, remote_panel_id)
+                try:
+                    tr_repo.record_traffic_operation(
+                        idempotency_key=f"identity_mismatch:{key_id}:{uc.today_date_str()}",
+                        operation_type=const.OP_HYBRID_REPAIR, key_id=key_id,
+                        actor_type=const.ACTOR_SYSTEM, result=const.OP_RESULT_FAILED,
+                        error_text=f"panel id mismatch: stored={_stored_panel_id} remote={remote_panel_id}")
+                except Exception:
+                    pass
+                # показываем безопасное сообщение вместо чужого ключа
+                _kb_safe = keyboards.create_back_to_menu_keyboard()
+                await smart_edit_message(
+                    message_to_edit,
+                    "⚠️ <b>Временная ошибка синхронизации</b>\n\n"
+                    "Данные подписки временно недоступны. Повторите попытку позже — "
+                    "если проблема сохранится, обратитесь в поддержку.",
+                    _kb_safe)
+                return
+
             conn = details.get('connection_string') or conn if details else conn
             remote_user = details.get('user') if details else None
             if remote_user:
@@ -2224,13 +2255,17 @@ def get_user_router() -> Router:
             tr_lim = (sub or {}).get('trafficLimitBytes', (sub or {}).get('trafficLimit'))
             tr_usg = (sub or {}).get('usedTrafficBytes', (sub or {}).get('trafficUsed'))
 
+            # При гибридном режиме строка «Лимит трафика» (сырые байты) скрывается:
+            # блок 📊 Трафик показывает читаемые WiFi/LTE лимиты (требование владельца)
+            _is_hybrid_key = bool(traffic_stats and traffic_stats.get("lte"))
+
             # Этап 5 ТЗ: расширенная статистика WiFi/LTE (без раскрытия гибрида)
             try:
                 traffic_stats = await _ts.get_key_traffic_stats(key_id)
             except Exception:
                 traffic_stats = None
 
-            text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=tr_lim, traffic_used=tr_usg, comment=key_data.get('comment_key'), traffic_stats=traffic_stats)
+            text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=(None if _is_hybrid_key else tr_lim), traffic_used=tr_usg, comment=key_data.get('comment_key'), traffic_stats=traffic_stats)
             kb_final = keyboards.create_dynamic_key_info_keyboard(key_id, conn, traffic_purchase_available=bool(_types_available))
 
             if prompt_message_id:
@@ -2393,8 +2428,15 @@ def get_user_router() -> Router:
             gb = int(text)
         except ValueError:
             return await message.answer("⚠️ Введите целое число гигабайтов (1–1000).")
-        if not (1 <= gb <= 1000):
-            return await message.answer("⚠️ Количество должно быть от 1 до 1000 ГБ.")
+        data = await state.get_data()
+        key_id = data.get("traffic_key_id")
+        host_name = (rw_repo.get_key_by_id(key_id) or {}).get('host_name')
+        host = tr_repo.get_host_hybrid_settings(host_name) or {}
+        host_min = int(host.get("traffic_purchase_min_gb") or 1)
+        host_max = int(host.get("traffic_purchase_max_gb") or 1000)
+        if not (host_min <= gb <= host_max):
+            return await message.answer(
+                f"⚠️ Для этого сервера доступно от {host_min} до {host_max} ГБ.")
         await _show_traffic_burnability(message, state, gb_amount=gb, package_id=None)
     # ===== Конец функции traffic_amount_input =====
 
@@ -2856,6 +2898,27 @@ def get_user_router() -> Router:
         await _show_plans_for_host(callback, host_name)
 
     async def _show_plans_for_host(callback: types.CallbackQuery, host_name: str, action: str = "new", key_id: int = 0, tier_price: float = 0.0):
+        # Блокировка покупки второго ключа при активном гибриде (требование владельца)
+        if action == "new":
+            try:
+                _user_keys = get_user_keys(callback.from_user.id) or []
+                _has_hybrid = any(
+                    tr_repo.get_pair_by_primary_key(int(k.get('key_id') or 0))
+                    and tr_repo.get_pair_by_primary_key(int(k.get('key_id') or 0)).get('status') == const.PAIR_ACTIVE
+                    for k in _user_keys if k.get('host_name') == host_name
+                )
+                if _has_hybrid:
+                    await callback.answer("ℹ️ У вас уже есть активная подписка на этом сервере.", show_alert=True)
+                    await smart_edit_message(
+                        callback.message,
+                        "ℹ️ <b>У вас уже есть активная подписка на этом сервере.</b>\n\n"
+                        "Покупка второй подписки на тот же сервер недоступна.\n"
+                        "Вы можете продлить существующую или докупить гигабайты в карточке ключа.",
+                        keyboards.create_back_to_menu_keyboard())
+                    return
+            except Exception as e:
+                logger.debug("hybrid block check: %s", e)
+
         plans = get_plans_for_host(host_name)
         if not plans: return await smart_edit_message(callback.message, f"❌ Для сервера «{host_name}» еще не настроены тарифные планы.")
         

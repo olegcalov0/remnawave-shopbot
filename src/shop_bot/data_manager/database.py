@@ -765,6 +765,8 @@ def _ensure_hosts_columns(cursor: sqlite3.Cursor) -> None:
         "lte_burnable_price_per_gb": "NUMERIC",
         "lte_non_burnable_price_per_gb": "NUMERIC",
         "low_traffic_threshold_percent": "INTEGER NOT NULL DEFAULT 10",
+        "traffic_purchase_min_gb": "INTEGER NOT NULL DEFAULT 1",
+        "traffic_purchase_max_gb": "INTEGER NOT NULL DEFAULT 1000",
     }
     for column, definition in extras.items():
         _ensure_table_column(cursor, "xui_hosts", column, definition)

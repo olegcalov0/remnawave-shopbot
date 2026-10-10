@@ -143,7 +143,7 @@ def get_key_info_text(key_number, expiry_date, created_date, connection_string, 
         remaining_str = "0мин"
 
     traffic_block = ""
-    if traffic_limit:
+    if traffic_limit is not None:
         t_lim_str = str(traffic_limit).strip()
         t_lim_display = "∞" if t_lim_str == "0" or t_lim_str.startswith("0 ") else t_lim_str
         traffic_block = f"{traffic_used} / {t_lim_display}"
@@ -163,6 +163,11 @@ def get_key_info_text(key_number, expiry_date, created_date, connection_string, 
 
     traffic_stats_block = get_traffic_stats_block(traffic_stats)
 
+    # При гибридном режиме (есть WiFi и LTE блок) строка «Лимит трафика»
+    # с сырыми байтами не выводится — блок 📊 Трафик показывает читаемые лимиты
+    _is_hybrid = bool(traffic_stats and traffic_stats.get("lte"))
+    traffic_row = "" if _is_hybrid else f"🛰 <b>Лимит трафика:</b> {traffic_block}\n"
+
     return (
         f"🔑 <b>Информация о ключе #{key_number}</b>\n\n"
         f"📅 <b>Сроки действия:</b>\n"
@@ -172,7 +177,7 @@ def get_key_info_text(key_number, expiry_date, created_date, connection_string, 
         f"⏳ <b>Осталось:</b> {remaining_str}\n"
         f"💌 <b>ID ключа:</b> <code>{email}</code>\n\n"
         f"📉 <b>Использование:</b>\n"
-        f"🛰 <b>Лимит трафика:</b> {traffic_block}\n" 
+        f"{traffic_row}"
         f"📱 <b>Лимит устройств:</b> {hwid_block}\n"
         f"{traffic_stats_block}"
         f"🗽 <b>Ваш ключ:</b>\n<code>{connection_string}</code>"

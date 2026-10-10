@@ -123,6 +123,23 @@ async def process_job(bot, job: dict) -> bool:
     error = job.get("__error__") or "fulfillment failed"
     attempts = int(job.get("attempts") or 1)
     max_attempts = int(job.get("max_attempts") or 10)
+
+    # Рефанд для traffic_purchase: если прошло > 30 мин с создания job
+    # и гигабайты не начислены — вернуть деньги на баланс, уведомить пользователя
+    if action == "traffic_purchase":
+        from datetime import datetime as _dt
+        try:
+            created_raw = job.get("created_at")
+            if created_raw:
+                created = _dt.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=uc.MSK_TZ)
+                age = uc.get_msk_time() - created
+                if age.total_seconds() > 30 * 60:
+                    return await _refund_traffic_purchase(bot, job, payload, error)
+        except Exception:
+            pass
+
     tr_repo.fail_job_retryable(job["job_id"], error, _delay_for_attempt(attempts), max_attempts)
 
     # уведомления: первая ошибка и переход в manual_review
@@ -143,6 +160,55 @@ async def process_job(bot, job: dict) -> bool:
                         "при задержке свяжитесь с поддержкой.")
         except Exception:
             pass
+    return False
+
+
+async def _refund_traffic_purchase(bot, job: dict, payload: dict, error: str) -> bool:
+    """Возврат средств за неудавшуюся докупку: balance +, purchase cancelled, уведомление.
+
+    Идемпотентно: cancel_purchase_refunded переводит статус только один раз,
+    повторный вызов не начислит баланс повторно.
+    """
+    payment_id = job.get("payment_id")
+    purchase = tr_repo.get_traffic_purchase(payment_id)
+    if not purchase:
+        return False
+
+    # условный переход: только один конкурентный обработчик выполнит рефанд
+    if not tr_repo.cancel_purchase_refunded(payment_id, reason=f"refund: {error[:300]}"):
+        logger.info("REFUND: %s уже обработан (fulfilled/cancelled) — пропускаю", payment_id)
+        return False
+
+    amount = float(purchase.get("total_price_rub") or 0)
+    user_id = int(purchase.get("user_id") or 0)
+    gb = int(purchase.get("gb_amount") or 0)
+    refund_ok = rw_repo.add_to_balance(user_id, amount)
+    logger.info("REFUND: payment=%s user=%s amount=%.2f gb=%s add_to_balance=%s",
+                payment_id, user_id, amount, gb, refund_ok)
+
+    tr_repo.fail_job_manual_review(job["job_id"], f"refunded after 30 min: {error[:200]}")
+
+    if refund_ok:
+        await _notify_admins(
+            bot, f"💸 <b>Рефанд докупки ГБ</b>\nПлатёж <code>{payment_id}</code>: "
+                 f"{gb} ГБ не начислены за 30 минут.\nВозвращено {amount:.2f} ₽ "
+                 f"пользователю <code>{user_id}</code>. Причина: <code>{error[:150]}</code>")
+        if bot and user_id:
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"😔 <b>Не удалось докупить гигабайты</b>\n\n"
+                    f"Оплата прошла, но начисление {gb} ГБ не удалось за отведённое время.\n"
+                    f"Сумма <b>{amount:.2f} ₽</b> возвращена на ваш баланс.\n\n"
+                    f"Попробуйте оформить покупку заново или обратитесь в поддержку.",
+                    parse_mode="HTML")
+            except Exception:
+                pass
+    else:
+        await _notify_admins(
+            bot, f"🚨 <b>Рефанд докупки ГБ НЕ УДАЛСЯ</b>\nПлатёж <code>{payment_id}</code>: "
+                 f"не удалось вернуть {amount:.2f} ₽ пользователю <code>{user_id}</code>. "
+                 f"Требуется ручной возврат.")
     return False
 
 

@@ -134,6 +134,8 @@ CANONICAL_COLUMNS: dict[str, dict[str, str]] = {
         "lte_burnable_price_per_gb": "NUMERIC",
         "lte_non_burnable_price_per_gb": "NUMERIC",
         "low_traffic_threshold_percent": "INTEGER NOT NULL DEFAULT 10",
+        "traffic_purchase_min_gb": "INTEGER NOT NULL DEFAULT 1",
+        "traffic_purchase_max_gb": "INTEGER NOT NULL DEFAULT 1000",
     },
     "pending_transactions": {
         "payment_id": "TEXT PRIMARY KEY",
