@@ -84,7 +84,44 @@ def _format_remaining_details(remaining: timedelta) -> str:
 
     return " ".join(parts) if parts else "меньше минуты"
 
-def get_key_info_text(key_number, expiry_date, created_date, connection_string, email=None, hwid_limit=None, hwid_usage=None, traffic_limit=None, traffic_used=None, comment=None):
+def get_traffic_stats_block(traffic_stats: dict | None) -> str:
+    """Блок статистики WiFi/LTE для карточки ключа (Этап 5 ТЗ, п.5).
+
+    Не раскрывает primary/hybrid, второй URL или технические ID.
+    """
+    if not traffic_stats or not traffic_stats.get("available"):
+        return ""
+    lines: list[str] = []
+    wifi = traffic_stats.get("wifi")
+    if wifi:
+        limit = wifi.get("limit_gb")
+        limit_str = "∞" if not limit else f"{limit:.0f} ГБ"
+        lines.append(
+            f"📡 <b>{html.quote(str(traffic_stats.get('wifi_name') or 'WiFi гигабайты'))}:</b> "
+            f"{wifi.get('used_gb', 0):.1f} / {limit_str}")
+        carry = traffic_stats.get("wifi_carry_gb")
+        if carry:
+            lines.append(f"   ↳ <i>переносимый остаток: {carry} ГБ</i>")
+    lte = traffic_stats.get("lte")
+    if lte:
+        limit = lte.get("limit_gb")
+        limit_str = "∞" if not limit else f"{limit:.0f} ГБ"
+        lines.append(
+            f"📶 <b>{html.quote(str(traffic_stats.get('lte_name') or 'LTE гигабайты'))}:</b> "
+            f"{lte.get('used_gb', 0):.1f} / {limit_str}")
+        carry = traffic_stats.get("lte_carry_gb")
+        if carry:
+            lines.append(f"   ↳ <i>переносимый остаток: {carry} ГБ</i>")
+    if not lines:
+        return ""
+    total = traffic_stats.get("total_remaining_gb") or 0
+    header = "📊 <b>Трафик:</b>\n" + "\n".join(lines)
+    if wifi and lte:
+        header += f"\n<b>Σ Общий остаток: {total:.1f} ГБ</b>"
+    return "\n" + header + "\n"
+
+
+def get_key_info_text(key_number, expiry_date, created_date, connection_string, email=None, hwid_limit=None, hwid_usage=None, traffic_limit=None, traffic_used=None, comment=None, traffic_stats=None):
     now = get_msk_time().replace(tzinfo=None)
     
     # Ensure expiry_date is comparable (naive vs naive)
@@ -124,6 +161,8 @@ def get_key_info_text(key_number, expiry_date, created_date, connection_string, 
     if comment:
         comment_block = f"💬 <b>Комментарий:</b> <blockquote>{html.quote(comment)}</blockquote>\n"
 
+    traffic_stats_block = get_traffic_stats_block(traffic_stats)
+
     return (
         f"🔑 <b>Информация о ключе #{key_number}</b>\n\n"
         f"📅 <b>Сроки действия:</b>\n"
@@ -135,6 +174,7 @@ def get_key_info_text(key_number, expiry_date, created_date, connection_string, 
         f"📉 <b>Использование:</b>\n"
         f"🛰 <b>Лимит трафика:</b> {traffic_block}\n" 
         f"📱 <b>Лимит устройств:</b> {hwid_block}\n"
+        f"{traffic_stats_block}"
         f"🗽 <b>Ваш ключ:</b>\n<code>{connection_string}</code>"
         f"\n\n{comment_block}"
     )

@@ -23,5 +23,12 @@ WORKDIR /app/project
 RUN /app/.venv/bin/pip install --no-cache-dir -U pip wheel setuptools \
     && /app/.venv/bin/pip install --no-cache-dir -e .
 
+# Тестовая инфраструктура нового домена (Этап 0 ТЗ): pytest для
+# `docker compose run --rm remnawave-shopbot /app/.venv/bin/python -m pytest tests/ -q`
+RUN /app/.venv/bin/pip install --no-cache-dir pytest pytest-asyncio
+
+# Каталог бэкапов (в compose монтируется volume)
+RUN mkdir -p /app/project/backups
+
 # Запуск через python из venv (важно, чтобы импортировался psutil из окружения)
 CMD ["/app/.venv/bin/python", "-m", "shop_bot"]

@@ -215,6 +215,16 @@ def create_webhook_app(bot_controller_instance):
         return " ".join(parts)
 
 
+    def _load_pending_metadata(payment_id: str) -> dict:
+        """Прочитать metadata подтверждённого платежа (без смены статусов)."""
+        try:
+            from shop_bot.data_manager.database import get_pending_metadata as _gpm
+            meta = _gpm(payment_id) or {}
+        except Exception:
+            meta = {}
+        meta.setdefault('payment_id', payment_id)
+        return meta
+
     def _handle_promo_after_payment(metadata: dict) -> None:
         try:
             promo_code = (metadata.get('promo_code') or '').strip()
@@ -1387,6 +1397,37 @@ def create_webhook_app(bot_controller_instance):
                 logger.error(f"Failed to get subscriptions for user {user_id}: {e}")
 
             
+            # ===== Новый домен: гибридные пары, purchases, operations (Этап 7 ТЗ, п.4) =====
+            hybrid_pairs = []
+            traffic_history = []
+            try:
+                from shop_bot.data_manager import traffic_repository as tr_repo
+                for key in (get_keys_for_user(user_id) or []):
+                    pair = tr_repo.get_pair_by_primary_key(int(key.get('key_id') or 0))
+                    if pair:
+                        hybrid_pairs.append({
+                            "pair_id": pair["pair_id"], "key_id": pair["primary_key_id"],
+                            "host_name": pair["host_name"], "status": pair["status"],
+                            "last_sync_status": pair["last_sync_status"],
+                            "last_sync_error": pair["last_sync_error"],
+                            "hybrid_username": pair["hybrid_username"],
+                        })
+                for purchase in tr_repo.list_purchases_for_user(user_id):
+                    traffic_history.append({
+                        "purchase_id": purchase["purchase_id"],
+                        "payment_id": purchase["payment_id"],
+                        "key_id": purchase["key_id"],
+                        "traffic_type": purchase["traffic_type"],
+                        "gb_amount": purchase["gb_amount"],
+                        "is_non_burnable": bool(purchase["is_non_burnable"]),
+                        "total_price_rub": float(purchase["total_price_rub"] or 0),
+                        "status": purchase["status"],
+                        "last_sync_error": purchase["last_sync_error"],
+                        "created_at": purchase["created_at"],
+                    })
+            except Exception as e:
+                logger.error(f"traffic details for user {user_id}: {e}")
+
             result = {
                 "ok": True,
                 "user": {
@@ -1409,6 +1450,8 @@ def create_webhook_app(bot_controller_instance):
                 "balance_history": balance_history,
                 "subscriptions": subscriptions,
                 "subs_stats": subs_stats,
+                "hybrid_pairs": hybrid_pairs,
+                "traffic_history": traffic_history,
                 "seller_info": {
                     "active": bool(user.get('seller_active', 0)),
                     "settings": get_seller_user(user_id) or {
@@ -3243,6 +3286,203 @@ def create_webhook_app(bot_controller_instance):
         flash(f"Хост '{name}' успешно добавлен.", 'success')
         return redirect(url_for('settings_page', tab='hosts'))
 
+    # ===== НОВЫЙ ДОМЕН: host-настройки гибрида/докупки, пакеты, корректировки (Этап 7 ТЗ) =====
+
+    @flask_app.route('/update-host-hybrid-settings', methods=['POST'])
+    @login_required
+    def update_host_hybrid_settings_route():
+        """Серверная валидация настроек гибрида и докупки (не только HTML)."""
+        from shop_bot.modules.hybrid_service import InvalidSuffixError, validate_suffix
+        try:
+            host_name = (request.form.get('host_name') or '').strip()
+            if not host_name:
+                return jsonify({'ok': False, 'error': 'host_name обязателен'}), 400
+
+            values: dict = {}
+            for flag in ('hybrid_enabled', 'hybrid_wifi_enabled', 'hybrid_lte_enabled',
+                         'traffic_purchase_enabled'):
+                if flag in request.form:
+                    values[flag] = 1 if request.form.get(flag) in ('1', 'on', 'true') else 0
+            for text_field in ('hybrid_suffix', 'hybrid_squad_uuid'):
+                if text_field in request.form:
+                    values[text_field] = (request.form.get(text_field) or '').strip()
+            for name_field in ('wifi_traffic_name', 'lte_traffic_name'):
+                if name_field in request.form:
+                    v = (request.form.get(name_field) or '').strip()
+                    values[name_field] = v or ('WiFi гигабайты' if name_field.startswith('wifi') else 'LTE гигабайты')
+            for price_field in ('wifi_burnable_price_per_gb', 'wifi_non_burnable_price_per_gb',
+                                'lte_burnable_price_per_gb', 'lte_non_burnable_price_per_gb'):
+                if price_field in request.form:
+                    raw = (request.form.get(price_field) or '').strip()
+                    if raw:
+                        price = float(raw)
+                        if price <= 0:
+                            return jsonify({'ok': False, 'error': f'{price_field} должен быть > 0'}), 400
+                        values[price_field] = price
+                    else:
+                        values[price_field] = None
+            if 'low_traffic_threshold_percent' in request.form:
+                thr = int(request.form.get('low_traffic_threshold_percent') or 10)
+                if not (1 <= thr <= 99):
+                    return jsonify({'ok': False, 'error': 'порог 1-99%'}), 400
+                values['low_traffic_threshold_percent'] = thr
+
+            # валидация suffix при включённом гибриде
+            if int(values.get('hybrid_enabled', 0)) == 1:
+                try:
+                    validate_suffix(values.get('hybrid_suffix'))
+                except InvalidSuffixError as exc:
+                    return jsonify({'ok': False, 'error': f'suffix: {exc}'}), 400
+                if not values.get('hybrid_squad_uuid'):
+                    return jsonify({'ok': False, 'error': 'hybrid squad UUID обязателен'}), 400
+
+            from shop_bot.data_manager import traffic_repository as tr_repo
+            ok = tr_repo.update_host_hybrid_settings(host_name, values)
+            return jsonify({'ok': ok})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
+
+    @flask_app.route('/add-traffic-package', methods=['POST'])
+    @login_required
+    def add_traffic_package_route():
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        try:
+            host_name = (request.form.get('host_name') or '').strip()
+            traffic_type = request.form.get('traffic_type')
+            gb_amount = int(request.form.get('gb_amount', 0))
+            price_rub = request.form.get('price_rub')
+            if traffic_type not in ('wifi', 'lte'):
+                return jsonify({'ok': False, 'error': 'недопустимый тип'}), 400
+            if not (1 <= gb_amount <= 1000):
+                return jsonify({'ok': False, 'error': 'объём 1-1000 ГБ'}), 400
+            if not price_rub or float(price_rub) <= 0:
+                return jsonify({'ok': False, 'error': 'цена должна быть > 0'}), 400
+            package_id = tr_repo.add_traffic_package(
+                host_name, traffic_type, gb_amount, float(price_rub),
+                int(request.form.get('sort_order') or 0))
+            return jsonify({'ok': bool(package_id), 'package_id': package_id})
+        except ValueError as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
+
+    @flask_app.route('/delete-traffic-package/<int:package_id>', methods=['POST'])
+    @login_required
+    def delete_traffic_package_route(package_id):
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        return jsonify({'ok': tr_repo.delete_traffic_package(package_id)})
+
+    @flask_app.route('/traffic-manual-adjustment', methods=['POST'])
+    @login_required
+    def traffic_manual_adjustment_route():
+        """Ручное начисление/списание несгораемых ГБ через traffic_service + аудит."""
+        import asyncio as _asyncio
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        from shop_bot.modules import traffic_service
+        try:
+            key_id = int(request.form.get('key_id'))
+            traffic_type = request.form.get('traffic_type')
+            gb = int(request.form.get('gb_amount'))
+            non_burnable = request.form.get('is_non_burnable') == '1'
+            reason = (request.form.get('reason') or '').strip()
+            admin_id = session.get('user_id') or 0
+            if traffic_type not in ('wifi', 'lte'):
+                return jsonify({'ok': False, 'error': 'недопустимый тип'}), 400
+            if not reason:
+                return jsonify({'ok': False, 'error': 'причина корректировки обязательна'}), 400
+            loop = current_app.config.get('EVENT_LOOP')
+            coro = traffic_service.manual_adjustment(
+                key_id=key_id, traffic_type=traffic_type, gb=gb,
+                non_burnable=non_burnable, admin_id=int(admin_id), reason=reason)
+            if loop and loop.is_running():
+                import concurrent.futures
+                fut = _asyncio.run_coroutine_threadsafe(coro, loop)
+                ok = fut.result(timeout=60)
+            else:
+                ok = _asyncio.run(coro)
+            return jsonify({'ok': bool(ok)})
+        except ValueError as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    @flask_app.route('/detach-pair/<int:pair_id>', methods=['POST'])
+    @login_required
+    def detach_pair_route(pair_id):
+        """Ручной разрыв пары с явным подтверждением; без уведомления пользователю."""
+        import asyncio as _asyncio
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        from shop_bot.modules import hybrid_service
+        pair = tr_repo.get_pair_by_id(pair_id)
+        if not pair:
+            return jsonify({'ok': False, 'error': 'пара не найдена'}), 404
+        confirmed = request.form.get('confirm') == '1'
+        transfer = request.form.get('transfer_carry_to_wifi') == '1'
+        if not confirmed:
+            return jsonify({'ok': False, 'error': 'требуется подтверждение'}), 400
+        admin_id = session.get('user_id') or 0
+        loop = current_app.config.get('EVENT_LOOP')
+        coro = hybrid_service.detach_pair_manually(pair, int(admin_id), transfer_carry_to_wifi=transfer)
+        try:
+            if loop and loop.is_running():
+                fut = _asyncio.run_coroutine_threadsafe(coro, loop)
+                ok = fut.result(timeout=60)
+            else:
+                ok = _asyncio.run(coro)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({'ok': bool(ok)})
+
+    @flask_app.route('/api/traffic-dashboard-stats', methods=['GET'])
+    @login_required
+    def traffic_dashboard_stats_route():
+        """Метрики нового домена для дашборда: SQL-запросами, без перебора панели."""
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        from shop_bot.data_manager import database as db
+        active_pairs = db._fetch_val(
+            "SELECT COUNT(*) FROM hybrid_subscription_pairs WHERE status = 'active'", default=0)
+        failed_creations = db._fetch_val(
+            "SELECT COUNT(*) FROM traffic_operations WHERE operation_type = 'hybrid_repair' AND result = 'failed'", default=0)
+        sync_errors = db._fetch_val(
+            "SELECT COUNT(*) FROM hybrid_subscription_pairs WHERE last_sync_status != 'ok'", default=0)
+        hwid_mismatches = db._fetch_val(
+            "SELECT COUNT(*) FROM traffic_operations WHERE operation_type = 'hwid_sync' AND result = 'failed'", default=0)
+        manual_review_jobs = db._fetch_val(
+            "SELECT COUNT(*) FROM payment_fulfillment_jobs WHERE status = 'manual_review'", default=0)
+        return jsonify({
+            'active_pairs': active_pairs, 'failed_creations': failed_creations,
+            'sync_errors': sync_errors, 'hwid_mismatches': hwid_mismatches,
+            'manual_review_jobs': manual_review_jobs,
+        })
+
+    # ===== МИГРАЦИЯ СТАРЫХ КЛЮЧЕЙ В ГИБРИД (Этап 9 ТЗ) =====
+
+    @flask_app.route('/hybrid-migration/start', methods=['POST'])
+    @login_required
+    def hybrid_migration_start_route():
+        from shop_bot.modules import hybrid_migration
+        host_name = (request.form.get('host_name') or '').strip()
+        if not host_name:
+            return jsonify({'ok': False, 'error': 'host_name обязателен'}), 400
+        state = hybrid_migration.start_migration(host_name)
+        return jsonify({'ok': True, 'state': state})
+
+    @flask_app.route('/hybrid-migration/pause', methods=['POST'])
+    @login_required
+    def hybrid_migration_pause_route():
+        from shop_bot.modules import hybrid_migration
+        return jsonify({'ok': True, 'state': hybrid_migration.pause_migration()})
+
+    @flask_app.route('/hybrid-migration/resume', methods=['POST'])
+    @login_required
+    def hybrid_migration_resume_route():
+        from shop_bot.modules import hybrid_migration
+        return jsonify({'ok': True, 'state': hybrid_migration.resume_migration()})
+
+    @flask_app.route('/hybrid-migration/status', methods=['GET'])
+    @login_required
+    def hybrid_migration_status_route():
+        from shop_bot.modules import hybrid_migration
+        return jsonify({'ok': True, 'state': hybrid_migration.get_migration_state()})
+
     @flask_app.route('/heleket-webhook', methods=['POST'])
     @csrf.exempt
     def heleket_webhook_handler():
@@ -3278,8 +3518,8 @@ def create_webhook_app(bot_controller_instance):
             
             if not compare_digest(signature, expected_sign):
                 logger.warning(f"Вебхук Heleket: Неверная подпись. Получено: '{signature}', Ожидалось: '{expected_sign}'")
-                logger.warning("Вебхук Heleket: Проверка подписи отключена в конфигурации (для совместимости с прокси).")
-                 
+                # Этап 3 ТЗ, п.4: при неверной подписи сразу 403, не продолжать обработку
+                return jsonify({"error": "Invalid signature"}), 403 
             
             try:
                 data = json.loads(raw_data)
@@ -3300,33 +3540,20 @@ def create_webhook_app(bot_controller_instance):
             payment_id = data.get("order_id")
             status = str(data.get("status", "")).lower()
 
-            if payment_id: 
+            if payment_id:
                 if status not in ['paid', 'confirm_check', 'success']:
                     logger.warning(f"Вебхук Heleket: Платеж {payment_id} имеет статус '{status}' (не оплачен). Игнорируем.")
                     return jsonify({"state": 0, "message": "Ignored non-paid status"}), 200
 
-                meta_from_db = find_and_complete_pending_transaction(payment_id)
-                
-                if meta_from_db:
-                    logger.info(f"Вебхук Heleket: Транзакция {payment_id} найдена и завершена.")
-                    
-                    bot = _bot_controller.get_bot_instance()
-                    loop = current_app.config.get('EVENT_LOOP')
-                    
-                    if bot and loop and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            handlers.process_successful_payment(bot, meta_from_db),
-                            loop
-                        )
-                        logger.info(f"Вебхук Heleket: Запланирована обработка платежа для {payment_id}")
-                    else:
-                        logger.error("Вебхук Heleket: Цикл событий или экземпляр бота не готовы")
-                        
-                    _handle_promo_after_payment(meta_from_db)
-                    
+                # Этап 3 ТЗ: общий безопасный поток подтверждения и постановки job
+                from shop_bot.modules import fulfillment as fulfillment_mod
+                if fulfillment_mod.confirm_payment_and_enqueue("Heleket", payment_id):
+                    logger.info(f"Вебхук Heleket: Платёж {payment_id} подтверждён и поставлен в очередь исполнения.")
+
+                    _handle_promo_after_payment(_load_pending_metadata(payment_id))
                 else:
-                    logger.warning(f"Вебхук Heleket: Транзакция {payment_id} не найдена или уже завершена.")
-            
+                    logger.warning(f"Вебхук Heleket: Платёж {payment_id} не найден в pending.")
+
             return jsonify({"state": 0, "message": "OK"}), 200
 
         except Exception as e:
@@ -3374,11 +3601,19 @@ def create_webhook_app(bot_controller_instance):
             price = float(request.form.get('price'))
             hwid_limit = int(request.form.get('hwid_limit') or 0)
             traffic_limit_gb = int(request.form.get('traffic_limit_gb') or 0)
-            
-            current_plan = get_plan_by_id(plan_id)
-            button_style = (request.form.get('button_style') or '').strip() if 'button_style' in request.form else (current_plan or {}).get('button_style')
-            icon_emoji_id = (request.form.get('icon_emoji_id') or '').strip() if 'icon_emoji_id' in request.form else (current_plan or {}).get('icon_emoji_id')
-            new_plan_id = create_plan(host_name=host_name, plan_name=plan_name, months=months, price=price, hwid_limit=hwid_limit, traffic_limit_gb=traffic_limit_gb, button_style=button_style, icon_emoji_id=icon_emoji_id)
+            # гибридные лимиты тарифа (Этап 7 ТЗ, п.2)
+            hybrid_hwid_limit = int(request.form.get('hybrid_hwid_limit') or 0)
+            hybrid_traffic_limit_gb = int(request.form.get('hybrid_traffic_limit_gb') or 0)
+
+            button_style = (request.form.get('button_style') or '').strip() or None
+            icon_emoji_id = (request.form.get('icon_emoji_id') or '').strip() or None
+            # FIX (Этап 7 ТЗ, п.3): ранее здесь использовался неопределённый plan_id
+            new_plan_id = create_plan(
+                host_name=host_name, plan_name=plan_name, months=months, price=price,
+                hwid_limit=hwid_limit, traffic_limit_gb=traffic_limit_gb,
+                hybrid_hwid_limit=hybrid_hwid_limit,
+                hybrid_traffic_limit_gb=hybrid_traffic_limit_gb,
+                button_style=button_style, icon_emoji_id=icon_emoji_id)
             
             wants_json = 'application/json' in (request.headers.get('Accept') or '') or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
             if wants_json:
@@ -3430,7 +3665,14 @@ def create_webhook_app(bot_controller_instance):
 
             button_style = (request.form.get('button_style') or '').strip() or None
             icon_emoji_id = (request.form.get('icon_emoji_id') or '').strip() or None
-            ok = update_plan(plan_id, plan_name, months, price, hwid_limit=hwid_limit, traffic_limit_gb=traffic_limit_gb, button_style=button_style, icon_emoji_id=icon_emoji_id)
+            hybrid_hwid_limit = request.form.get('hybrid_hwid_limit')
+            hybrid_traffic_limit_gb = request.form.get('hybrid_traffic_limit_gb')
+            ok = update_plan(
+                plan_id, plan_name, months, price, hwid_limit=hwid_limit,
+                traffic_limit_gb=traffic_limit_gb, button_style=button_style,
+                icon_emoji_id=icon_emoji_id,
+                hybrid_hwid_limit=int(hybrid_hwid_limit) if hybrid_hwid_limit not in (None, '') else None,
+                hybrid_traffic_limit_gb=int(hybrid_traffic_limit_gb) if hybrid_traffic_limit_gb not in (None, '') else None)
             if ok:
                 if wants_json:
                     plan = get_plan_by_id(plan_id)
@@ -3502,17 +3744,16 @@ def create_webhook_app(bot_controller_instance):
         try:
             event_json = request.json
             if event_json.get("event") == "payment.succeeded":
-                metadata = event_json.get("object", {}).get("metadata", {})
-                
-                bot = _bot_controller.get_bot_instance()
-                payment_processor = handlers.process_successful_payment
+                obj = event_json.get("object", {})
+                metadata = obj.get("metadata", {}) or {}
+                payment_id = metadata.get("payment_id") or obj.get("id")
 
-                if metadata and bot is not None and payment_processor is not None:
-                    loop = current_app.config.get('EVENT_LOOP')
-                    if loop and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(payment_processor(bot, metadata), loop)
-                    else:
-                        logger.error("YooKassa вебхук: цикл событий недоступен!")
+                # Этап 3 ТЗ: общий поток — атомарное подтверждение + job, быстрый 200
+                if payment_id:
+                    from shop_bot.modules import fulfillment as fulfillment_mod
+                    fulfillment_mod.confirm_payment_and_enqueue("YooKassa", str(payment_id), metadata)
+                else:
+                    logger.warning("YooKassa вебхук: payment.succeeded без payment_id")
             return 'OK', 200
         except Exception as e:
             logger.error(f"Ошибка в обработчике вебхука YooKassa: {e}", exc_info=True)
@@ -3601,20 +3842,13 @@ def create_webhook_app(bot_controller_instance):
                 return 'OK', 200
             
             logger.info(f"💰 Обрабатываем платеж: {payment_id}")
-            metadata = find_and_complete_pending_transaction(payment_id)
-            if not metadata:
+            # Этап 3 ТЗ: общий поток подтверждения и постановки job
+            from shop_bot.modules import fulfillment as fulfillment_mod
+            if not fulfillment_mod.confirm_payment_and_enqueue("YooMoney", payment_id):
                 logger.warning(f"❌ Метаданные не найдены для платежа: {payment_id}")
                 return 'OK', 200
-            
-            logger.info(f"✅ Найдены метаданные для платежа {payment_id}: пользователь={metadata.get('user_id')}, сумма={metadata.get('price')}")
-            bot = _bot_controller.get_bot_instance()
-            loop = current_app.config.get('EVENT_LOOP')
-            payment_processor = handlers.process_successful_payment
-            if bot and loop and loop.is_running():
-                asyncio.run_coroutine_threadsafe(payment_processor(bot, metadata), loop)
-                logger.info(f"🚀 Запущена обработка платежа: {payment_id}")
-            else:
-                logger.error("❌ Бот или цикл событий недоступен")
+
+            logger.info(f"✅ Платёж {payment_id} подтверждён и поставлен в очередь исполнения")
             return 'OK', 200
         except Exception as e:
             logger.error(f"💥 Ошибка в webhook ЮMoney: {e}", exc_info=True)
@@ -3625,56 +3859,32 @@ def create_webhook_app(bot_controller_instance):
     def cryptobot_webhook_handler():
         try:
             request_data = request.json
-            
+
             if request_data and request_data.get('update_type') == 'invoice_paid':
                 payload_data = request_data.get('payload', {})
-                
+
                 payload_string = payload_data.get('payload')
-                
+
                 if not payload_string:
                     logger.warning("CryptoBot вебхук: Получен оплаченный invoice, но payload пустой.")
                     return 'OK', 200
 
-                parts = payload_string.split(':')
-                if len(parts) < 9:
+                # Этап 3 ТЗ, п.6: стабильный внутренний payment_id вместо разбора
+                # строки с частями через ':' как источника истины. Первая часть
+                # payload-строки — внутренний payment_id; данные сверяются с БД.
+                internal_payment_id = payload_string.split(':')[0].strip()
+                if not internal_payment_id:
                     logger.error(f"CryptoBot вебхук: некорректный формат payload: {payload_string}")
                     return 'Error', 400
 
-                metadata = {
-                    "user_id": parts[0],
-                    "months": parts[1],
-                    "price": parts[2],
-                    "action": parts[3],
-                    "key_id": parts[4],
-                    "host_name": parts[5],
-                    "plan_id": parts[6],
-                    "customer_email": parts[7] if parts[7] != 'None' else None,
-                    "payment_method": parts[8]
-                }
-
-                if len(parts) >= 10:
-                    metadata["promo_code"] = (parts[9] if parts[9] != 'None' else None)
-                if len(parts) >= 11:
-                    metadata["promo_discount"] = parts[10]
-                if len(parts) >= 12:
-                    metadata["tier_device_count"] = parts[11] if parts[11] != 'None' else None
-                
-                bot = _bot_controller.get_bot_instance()
-                loop = current_app.config.get('EVENT_LOOP')
-                payment_processor = handlers.process_successful_payment
-
-                if bot and loop and loop.is_running():
-
-                    try:
-                        _handle_promo_after_payment(metadata)
-                    except Exception:
-                        pass
-                    asyncio.run_coroutine_threadsafe(payment_processor(bot, metadata), loop)
+                from shop_bot.modules import fulfillment as fulfillment_mod
+                if not fulfillment_mod.confirm_payment_and_enqueue("CryptoBot", internal_payment_id):
+                    logger.warning(f"CryptoBot вебхук: pending-платёж {internal_payment_id} не найден")
                 else:
-                    logger.error("CryptoBot вебхук: не удалось обработать платёж — бот или цикл событий не запущены.")
+                    logger.info(f"CryptoBot вебхук: платёж {internal_payment_id} поставлен в очередь исполнения")
 
             return 'OK', 200
-            
+
         except Exception as e:
             logger.error(f"Ошибка в обработчике вебхука CryptoBot: {e}", exc_info=True)
             return 'Error', 500
@@ -3697,16 +3907,14 @@ def create_webhook_app(bot_controller_instance):
                         amount_nano = int(in_msg.get('value', 0))
                         amount_ton = float(amount_nano / 1_000_000_000)
 
+                        # Этап 3 ТЗ: общий поток; сверка суммы выполняется в
+                        # find_and_complete_ton_transaction (оставлена для TON)
                         metadata = find_and_complete_ton_transaction(payment_id, amount_ton)
-                        
+
                         if metadata:
                             logger.info(f"TON Payment successful for payment_id: {payment_id}")
-                            bot = _bot_controller.get_bot_instance()
-                            loop = current_app.config.get('EVENT_LOOP')
-                            payment_processor = handlers.process_successful_payment
-
-                            if bot and loop and loop.is_running():
-                                asyncio.run_coroutine_threadsafe(payment_processor(bot, metadata), loop)
+                            from shop_bot.modules import fulfillment as fulfillment_mod
+                            fulfillment_mod.confirm_payment_and_enqueue("TON", payment_id, metadata)
             
             return 'OK', 200
         except Exception as e:
@@ -3741,28 +3949,15 @@ def create_webhook_app(bot_controller_instance):
             if status == 'CONFIRMED':
                 
                 payment_id = data.get('payload')
-                
+
                 if not payment_id:
                     logger.warning("Platega webhook: отсутствует payload (payment_id)")
                     return 'OK', 200
-                
-                
-                metadata = find_and_complete_pending_transaction(payment_id)
-                if metadata:
-                    logger.info(f"Platega: найдены метаданные для платежа {payment_id}")
-                    
-                    bot = _bot_controller.get_bot_instance()
-                    loop = current_app.config.get('EVENT_LOOP')
-                    payment_processor = handlers.process_successful_payment
-                    
-                    if bot and loop and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            payment_processor(bot, metadata), 
-                            loop
-                        )
-                        logger.info(f"Platega: платеж {payment_id} обработан")
-                    else:
-                        logger.error("Platega webhook: бот или цикл событий недоступен")
+
+                # Этап 3 ТЗ: общий поток подтверждения и постановки job
+                from shop_bot.modules import fulfillment as fulfillment_mod
+                if fulfillment_mod.confirm_payment_and_enqueue("Platega", payment_id):
+                    logger.info(f"Platega: платёж {payment_id} подтверждён и поставлен в очередь")
                 else:
                     logger.warning(f"Platega webhook: метаданные не найдены для платежа {payment_id}")
             elif status == 'CANCELED':

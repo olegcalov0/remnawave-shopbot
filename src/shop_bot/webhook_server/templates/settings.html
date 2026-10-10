@@ -2001,6 +2001,115 @@
                         </div>
                     </div>
 
+                    <!-- Hybrid & Traffic Purchase (Этап 7 ТЗ, п.1) -->
+                    <div class="bg-white/5 border border-white/10 rounded-2xl p-5">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-2">
+                                <div class="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center text-violet-400">
+                                    <span class="material-symbols-outlined text-lg">lan</span>
+                                </div>
+                                <h5 class="text-white font-bold text-sm tracking-tight">Гибрид и докупка трафика</h5>
+                            </div>
+                        </div>
+                        <form id="hybrid-settings-{{ host.host_name }}"
+                              onsubmit="return saveHybridSettings(event, '{{ host.host_name }}')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                            <div class="space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <span class="text-white/60 text-[10px] font-bold">Гибридный режим</span>
+                                        <p class="text-white/30 text-[8px]">Вторая линия трафика для новых подписок</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" name="hybrid_enabled" value="1" class="sr-only peer"
+                                               {% if host.hybrid_enabled %}checked{% endif %} />
+                                        <div class="w-9 h-5 bg-white/10 rounded-full peer peer-checked:bg-violet-500 transition-all after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                                    </label>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block text-white/40 text-[9px] uppercase font-bold tracking-wider ml-1">Suffix</label>
+                                        <input type="text" name="hybrid_suffix" value="{{ host.hybrid_suffix or '' }}" placeholder="_h"
+                                               pattern="[A-Za-z0-9_]{1,20}"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-white text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label class="block text-white/40 text-[9px] uppercase font-bold tracking-wider ml-1">Hybrid squad UUID</label>
+                                        <input type="text" name="hybrid_squad_uuid" value="{{ host.hybrid_squad_uuid or '' }}" placeholder="uuid"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-white text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block text-white/40 text-[9px] uppercase font-bold tracking-wider ml-1">Название WiFi</label>
+                                        <input type="text" name="wifi_traffic_name" value="{{ host.wifi_traffic_name or 'WiFi гигабайты' }}"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-white text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label class="block text-white/40 text-[9px] uppercase font-bold tracking-wider ml-1">Название LTE</label>
+                                        <input type="text" name="lte_traffic_name" value="{{ host.lte_traffic_name or 'LTE гигабайты' }}"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-white text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-4 gap-2">
+                                    <div>
+                                        <label class="block text-white/40 text-[8px] uppercase font-bold tracking-wider ml-1">WiFi ₽/ГБ (сгор.)</label>
+                                        <input type="number" min="0" step="0.01" name="wifi_burnable_price_per_gb" value="{{ host.wifi_burnable_price_per_gb or '' }}" placeholder="10"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[10px] focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label class="block text-white/40 text-[8px] uppercase font-bold tracking-wider ml-1">WiFi ₽/ГБ (несгор.)</label>
+                                        <input type="number" min="0" step="0.01" name="wifi_non_burnable_price_per_gb" value="{{ host.wifi_non_burnable_price_per_gb or '' }}" placeholder="12"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[10px] focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label class="block text-white/40 text-[8px] uppercase font-bold tracking-wider ml-1">LTE ₽/ГБ (сгор.)</label>
+                                        <input type="number" min="0" step="0.01" name="lte_burnable_price_per_gb" value="{{ host.lte_burnable_price_per_gb or '' }}" placeholder="10"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[10px] focus:outline-none" />
+                                    </div>
+                                    <div>
+                                        <label class="block text-white/40 text-[8px] uppercase font-bold tracking-wider ml-1">LTE ₽/ГБ (несгор.)</label>
+                                        <input type="number" min="0" step="0.01" name="lte_non_burnable_price_per_gb" value="{{ host.lte_non_burnable_price_per_gb or '' }}" placeholder="12"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[10px] focus:outline-none" />
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-3 gap-2 items-center">
+                                    <label class="flex items-center gap-2 text-white/60 text-[10px] font-bold">
+                                        <input type="checkbox" name="hybrid_wifi_enabled" value="1" {% if host.hybrid_wifi_enabled is not defined or host.hybrid_wifi_enabled %}checked{% endif %} class="accent-violet-500" />
+                                        WiFi вкл
+                                    </label>
+                                    <label class="flex items-center gap-2 text-white/60 text-[10px] font-bold">
+                                        <input type="checkbox" name="hybrid_lte_enabled" value="1" {% if host.hybrid_lte_enabled is not defined or host.hybrid_lte_enabled %}checked{% endif %} class="accent-violet-500" />
+                                        LTE вкл
+                                    </label>
+                                    <div>
+                                        <label class="block text-white/40 text-[8px] uppercase font-bold tracking-wider ml-1">Порог мало (%)</label>
+                                        <input type="number" min="1" max="99" name="low_traffic_threshold_percent" value="{{ host.low_traffic_threshold_percent or 10 }}"
+                                               class="w-full bg-black/20 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[10px] focus:outline-none" />
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between pt-3 border-t border-white/5">
+                                    <div>
+                                        <span class="text-white/60 text-[10px] font-bold">Докупка трафика</span>
+                                        <p class="text-white/30 text-[8px]">Кнопка «Купить гигабайты» у ключей хоста</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" name="traffic_purchase_enabled" value="1" class="sr-only peer"
+                                               {% if host.traffic_purchase_enabled %}checked{% endif %} />
+                                        <div class="w-9 h-5 bg-white/10 rounded-full peer peer-checked:bg-emerald-500 transition-all after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                                    </label>
+                                </div>
+                                <div class="flex justify-end pt-2">
+                                    <button type="submit"
+                                            class="px-4 py-1.5 rounded-lg bg-violet-500/20 text-violet-300 text-[10px] font-bold uppercase tracking-widest hover:bg-violet-500/30 transition-all border border-violet-500/20">
+                                        Сохранить
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                        <p class="text-white/30 text-[8px] mt-2">Смена suffix применяется только к новым парам; существующие не переименовываются.</p>
+                    </div>
+
                     <!-- Plans -->
                     <div class="bg-white/5 border border-white/10 rounded-2xl p-5">
                         <div class="flex items-center justify-between mb-6">
@@ -2099,6 +2208,16 @@
                                             <input type="number" name="hwid_limit" value="{{ plan.hwid_limit }}"
                                                 placeholder="HWID"
                                                 class="bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-white text-[11px] focus:ring-1 focus:ring-primary/40 focus:outline-none" />
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <input type="number" name="hybrid_traffic_limit_gb"
+                                                value="{{ plan.hybrid_traffic_limit_gb or 0 }}" placeholder="Гибрид GB (0=∞)"
+                                                title="Лимит трафика второй линии"
+                                                class="bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-violet-300 text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
+                                            <input type="number" name="hybrid_hwid_limit"
+                                                value="{{ plan.hybrid_hwid_limit or 0 }}" placeholder="Гибрид HWID"
+                                                title="Лимит устройств второй линии"
+                                                class="bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-violet-300 text-[11px] focus:ring-1 focus:ring-violet-500/40 focus:outline-none" />
                                         </div>
                                         <div class="space-y-1.5">
                                             <div class="flex justify-center gap-1 items-center flex-wrap">
@@ -3591,6 +3710,43 @@
         if (r.ok) showToast('success', 'Настройка сохранена');
         else showToast('danger', r.error || 'Ошибка');
     }
+
+    // ===== Гибрид и докупка: сохранение host-настроек (Этап 7 ТЗ) =====
+    async function saveHybridSettings(event, hostName) {
+        event.preventDefault();
+        const form = event.target;
+        const fd = new FormData(form);
+        fd.append('host_name', hostName);
+        // чекбоксы: 1/0 (сервер валидирует повторно)
+        for (const cb of ['hybrid_enabled', 'hybrid_wifi_enabled', 'hybrid_lte_enabled', 'traffic_purchase_enabled']) {
+            fd.set(cb, form.querySelector(`input[name="${cb}"]`)?.checked ? '1' : '0');
+        }
+        const r = await sendRequest('/update-host-hybrid-settings', 'POST', fd);
+        if (r.ok) showToast('success', 'Настройки гибрида сохранены');
+        else showToast('danger', r.error || 'Ошибка');
+        return false;
+    }
+
+    async function addTrafficPackage(hostName) {
+        const type = document.getElementById(`tp-type-${hostName}`)?.value || 'wifi';
+        const gb = document.getElementById(`tp-gb-${hostName}`)?.value;
+        const price = document.getElementById(`tp-price-${hostName}`)?.value;
+        const fd = new FormData();
+        fd.append('host_name', hostName); fd.append('traffic_type', type);
+        fd.append('gb_amount', gb); fd.append('price_rub', price);
+        const r = await sendRequest('/add-traffic-package', 'POST', fd);
+        if (r.ok) { showToast('success', 'Пакет добавлен'); setTimeout(() => location.reload(), 600); }
+        else showToast('danger', r.error || 'Ошибка');
+    }
+
+    async function deleteTrafficPackage(packageId) {
+        const fd = new FormData();
+        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        const r = await sendRequest(`/delete-traffic-package/${packageId}`, 'POST', fd);
+        if (r.ok) { showToast('success', 'Пакет удалён'); setTimeout(() => location.reload(), 600); }
+        else showToast('danger', r.error || 'Ошибка');
+    }
+
 
 
 

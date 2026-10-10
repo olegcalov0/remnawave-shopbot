@@ -632,6 +632,10 @@ def initialize_db():
                 "stealth_login_hotkey": "ctrl+b",
                 "dashboard_layout": "sidebar",
                 "demo_mode_enabled": "0",
+
+                # ===== рефералка для трафика (Этап 6 ТЗ) =====
+                "referral_traffic_purchases_enabled": "0",
+                "referral_discount_applies_to_traffic": "0",
             }
             _ensure_default_values(cursor, "bot_settings", default_settings)
             conn.commit()
@@ -746,6 +750,21 @@ def _ensure_hosts_columns(cursor: sqlite3.Cursor) -> None:
         "tier_lock_extend": "INTEGER DEFAULT 0",
         "button_style": "TEXT DEFAULT NULL",
         "icon_emoji_id": "TEXT DEFAULT NULL",
+
+        # ===== гибрид и докупка трафика (Этап 1 ТЗ, раздел 4.1) =====
+        "hybrid_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "hybrid_suffix": "TEXT",
+        "hybrid_squad_uuid": "TEXT",
+        "hybrid_wifi_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "hybrid_lte_enabled": "INTEGER NOT NULL DEFAULT 1",
+        "traffic_purchase_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "wifi_traffic_name": "TEXT NOT NULL DEFAULT 'WiFi гигабайты'",
+        "lte_traffic_name": "TEXT NOT NULL DEFAULT 'LTE гигабайты'",
+        "wifi_burnable_price_per_gb": "NUMERIC",
+        "wifi_non_burnable_price_per_gb": "NUMERIC",
+        "lte_burnable_price_per_gb": "NUMERIC",
+        "lte_non_burnable_price_per_gb": "NUMERIC",
+        "low_traffic_threshold_percent": "INTEGER NOT NULL DEFAULT 10",
     }
     for column, definition in extras.items():
         _ensure_table_column(cursor, "xui_hosts", column, definition)
@@ -783,6 +802,9 @@ def _ensure_plans_columns(cursor: sqlite3.Cursor) -> None:
         "traffic_limit_gb": "INTEGER DEFAULT 0",
         "button_style": "TEXT DEFAULT NULL",
         "icon_emoji_id": "TEXT DEFAULT NULL",
+        # ===== гибридные лимиты (Этап 1 ТЗ, раздел 4.2) =====
+        "hybrid_traffic_limit_gb": "INTEGER NOT NULL DEFAULT 0",
+        "hybrid_hwid_limit": "INTEGER NOT NULL DEFAULT 0",
     }
     for column, definition in extras.items():
         _ensure_table_column(cursor, "plans", column, definition)
@@ -969,6 +991,223 @@ def _ensure_vpn_keys_schema(cursor: sqlite3.Cursor) -> None:
 
 # ===== RUN_MIGRATION =====
 # ===========================================
+# ===== _ENSURE_TRAFFIC_TABLES (Этап 1 ТЗ, раздел 4) =====
+def _ensure_traffic_tables(cursor: sqlite3.Cursor) -> None:
+    """Пакеты докупки, покупки, журнал операций, реферальные награды, carry-балансы."""
+
+    # 4.3 traffic_purchase_packages
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_purchase_packages (
+            package_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_name TEXT NOT NULL,
+            traffic_type TEXT NOT NULL CHECK (traffic_type IN ('wifi', 'lte')),
+            gb_amount INTEGER NOT NULL CHECK (gb_amount BETWEEN 1 AND 1000),
+            price_rub NUMERIC NOT NULL CHECK (price_rub > 0),
+            is_active INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tpp_host_type_active ON traffic_purchase_packages(host_name, traffic_type, is_active, sort_order)")
+
+    # 4.4 hybrid_subscription_pairs
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS hybrid_subscription_pairs (
+            pair_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            primary_key_id INTEGER NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            host_name TEXT NOT NULL,
+            telegram_id INTEGER NOT NULL,
+            base_username TEXT NOT NULL,
+            hybrid_username TEXT NOT NULL,
+            primary_remnawave_user_id TEXT NOT NULL,
+            hybrid_remnawave_user_id TEXT NOT NULL,
+            primary_email TEXT NOT NULL,
+            hybrid_email TEXT NOT NULL,
+            primary_squad_uuid TEXT NOT NULL,
+            hybrid_squad_uuid TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            last_sync_status TEXT NOT NULL DEFAULT 'ok',
+            last_sync_error TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            detached_at TIMESTAMP,
+            detached_by INTEGER
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hsp_user_id ON hybrid_subscription_pairs(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hsp_host_status ON hybrid_subscription_pairs(host_name, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hsp_telegram_id ON hybrid_subscription_pairs(telegram_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hsp_primary_ruid ON hybrid_subscription_pairs(primary_remnawave_user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hsp_hybrid_ruid ON hybrid_subscription_pairs(hybrid_remnawave_user_id)")
+
+    # 4.5 traffic_carry_balances
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_carry_balances (
+            balance_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_id INTEGER NOT NULL,
+            pair_id INTEGER NULL,
+            target_role TEXT NOT NULL CHECK (target_role IN ('primary', 'hybrid')),
+            traffic_type TEXT NOT NULL CHECK (traffic_type IN ('wifi', 'lte')),
+            remaining_gb INTEGER NOT NULL DEFAULT 0 CHECK (remaining_gb >= 0),
+            last_reset_date DATE,
+            next_reset_date DATE NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(key_id, target_role, traffic_type)
+        )
+    ''')
+
+    # 4.6 traffic_purchases
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_purchases (
+            purchase_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL,
+            key_id INTEGER NOT NULL,
+            pair_id INTEGER NULL,
+            host_name TEXT NOT NULL,
+            target_role TEXT NOT NULL,
+            target_remnawave_user_id TEXT NOT NULL,
+            traffic_type TEXT NOT NULL,
+            gb_amount INTEGER NOT NULL CHECK (gb_amount BETWEEN 1 AND 1000),
+            is_non_burnable INTEGER NOT NULL,
+            source_kind TEXT NOT NULL,
+            package_id INTEGER NULL,
+            unit_price_rub NUMERIC NULL,
+            total_price_rub NUMERIC NOT NULL,
+            discount_rub NUMERIC NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            sync_attempts INTEGER NOT NULL DEFAULT 0,
+            last_sync_error TEXT,
+            paid_at TIMESTAMP,
+            fulfilled_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tp_key_created ON traffic_purchases(key_id, created_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tp_user_status ON traffic_purchases(user_id, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tp_status_updated ON traffic_purchases(status, updated_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tp_target_ruid ON traffic_purchases(target_remnawave_user_id)")
+
+    # 4.7 traffic_operations
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_operations (
+            operation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT UNIQUE NOT NULL,
+            operation_type TEXT NOT NULL,
+            purchase_id INTEGER NULL,
+            key_id INTEGER NOT NULL,
+            pair_id INTEGER NULL,
+            target_role TEXT,
+            target_remnawave_user_id TEXT,
+            traffic_type TEXT,
+            gb_delta INTEGER NOT NULL DEFAULT 0,
+            is_non_burnable INTEGER NULL,
+            actor_type TEXT NOT NULL,
+            actor_id INTEGER NULL,
+            result TEXT NOT NULL,
+            details_json TEXT,
+            error_text TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_top_key_created ON traffic_operations(key_id, created_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_top_result ON traffic_operations(result)")
+
+    # 4.8 traffic_referral_rewards
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS traffic_referral_rewards (
+            reward_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_purchase_id INTEGER NOT NULL UNIQUE,
+            referrer_user_id INTEGER NOT NULL,
+            recipient_key_id INTEGER NOT NULL,
+            traffic_type TEXT NOT NULL,
+            target_role TEXT NOT NULL,
+            gb_amount INTEGER NOT NULL CHECK (gb_amount >= 1),
+            is_non_burnable INTEGER NOT NULL,
+            percent_snapshot NUMERIC NOT NULL,
+            status TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            fulfilled_at TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trr_referrer ON traffic_referral_rewards(referrer_user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trr_status ON traffic_referral_rewards(status)")
+
+
+# ===== _ENSURE_FULFILLMENT_TABLES (раздел 4.9) =====
+def _ensure_fulfillment_tables(cursor: sqlite3.Cursor) -> None:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payment_fulfillment_jobs (
+            job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payment_id TEXT NOT NULL UNIQUE,
+            provider TEXT NOT NULL,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 10,
+            next_attempt_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            locked_at TIMESTAMP,
+            lock_token TEXT,
+            last_error TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pfj_status_next ON payment_fulfillment_jobs(status, next_attempt_at)")
+    # pending_transactions.status: минимум pending|paid|failed (Этап 3 ТЗ)
+    _ensure_table_column(cursor, "pending_transactions", "status", "TEXT DEFAULT 'pending'")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pt_status ON pending_transactions(status)")
+
+
+# ===== _ENSURE_BACKUP_SNAPSHOT_TABLES (раздел 4.10) =====
+def _ensure_backup_snapshot_tables(cursor: sqlite3.Cursor) -> None:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS backup_runs (
+            backup_run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_name TEXT,
+            requested_by INTEGER NULL,
+            source TEXT NOT NULL,
+            snapshot_status TEXT NOT NULL,
+            snapshot_error TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS remnawave_state_snapshots (
+            snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backup_run_id INTEGER NOT NULL,
+            key_id INTEGER NOT NULL,
+            pair_id INTEGER NULL,
+            target_role TEXT NOT NULL,
+            remnawave_user_id TEXT NOT NULL,
+            traffic_limit_bytes INTEGER NULL,
+            used_traffic_bytes INTEGER NULL,
+            status TEXT,
+            expire_at TEXT,
+            payload_json TEXT,
+            collected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            collection_error TEXT
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rss_backup_run ON remnawave_state_snapshots(backup_run_id)")
+
+
+# ===== _ENSURE_SCHEMA_VERSION =====
+def _ensure_schema_version(cursor: sqlite3.Cursor) -> None:
+    """Фиксация версии схемы для проверки при восстановлении бэкапа (Этап 1, п.6)."""
+    from shop_bot.modules.domain_constants import SCHEMA_VERSION_KEY, SCHEMA_VERSION_CURRENT
+    cursor.execute(
+        "INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)",
+        (SCHEMA_VERSION_KEY, SCHEMA_VERSION_CURRENT),
+    )
+
+
 # ===== _ENSURE_WEBAPP_SETTINGS_TABLE =====
 def _ensure_webapp_settings_table(cursor: sqlite3.Cursor):
     try:
@@ -1078,6 +1317,12 @@ def run_migration():
             
             _ensure_pending_transactions_table(cursor)
             _ensure_default_button_configs(cursor)
+
+            # ===== Новый домен: гибриды, трафик, fulfillment, snapshots (Этап 1) =====
+            _ensure_traffic_tables(cursor)
+            _ensure_fulfillment_tables(cursor)
+            _ensure_backup_snapshot_tables(cursor)
+            _ensure_schema_version(cursor)
             
 
             try:
@@ -2721,11 +2966,11 @@ def delete_button_config(button_id: int) -> bool:
 
 
 # ===== CREATE_PLAN =====
-def create_plan(host_name: str, plan_name: str, months: int, price: float, hwid_limit: int = 0, traffic_limit_gb: int = 0, button_style: str = None, icon_emoji_id: str = None):
+def create_plan(host_name: str, plan_name: str, months: int, price: float, hwid_limit: int = 0, traffic_limit_gb: int = 0, button_style: str = None, icon_emoji_id: str = None, hybrid_hwid_limit: int = 0, hybrid_traffic_limit_gb: int = 0):
     host_name = normalize_host_name(host_name)
     cursor = _exec(
-        "INSERT INTO plans (host_name, plan_name, months, price, hwid_limit, traffic_limit_gb, button_style, icon_emoji_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (host_name, plan_name, months, price, hwid_limit, traffic_limit_gb, button_style or None, icon_emoji_id or None),
+        "INSERT INTO plans (host_name, plan_name, months, price, hwid_limit, traffic_limit_gb, button_style, icon_emoji_id, hybrid_hwid_limit, hybrid_traffic_limit_gb) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (host_name, plan_name, months, price, hwid_limit, traffic_limit_gb, button_style or None, icon_emoji_id or None, hybrid_hwid_limit, hybrid_traffic_limit_gb),
         f"Не удалось создать тариф для хоста '{host_name}'"
     )
     if cursor: new_id = cursor.lastrowid; logging.info(f"Created new plan '{plan_name}' for host '{host_name}' with HWID={hwid_limit}, Traffic={traffic_limit_gb}GB."); return new_id
@@ -2758,10 +3003,19 @@ def delete_plan(plan_id: int):
 
 
 # ===== UPDATE_PLAN =====
-def update_plan(plan_id: int, plan_name: str, months: int, price: float, hwid_limit: int = 0, traffic_limit_gb: int = 0, button_style: str = None, icon_emoji_id: str = None) -> bool:
+def update_plan(plan_id: int, plan_name: str, months: int, price: float, hwid_limit: int = 0, traffic_limit_gb: int = 0, button_style: str = None, icon_emoji_id: str = None, hybrid_hwid_limit: int = None, hybrid_traffic_limit_gb: int = None) -> bool:
+    sets = "plan_name = ?, months = ?, price = ?, hwid_limit = ?, traffic_limit_gb = ?, button_style = ?, icon_emoji_id = ?"
+    params = [plan_name, months, price, hwid_limit, traffic_limit_gb, button_style or None, icon_emoji_id or None]
+    if hybrid_hwid_limit is not None:
+        sets += ", hybrid_hwid_limit = ?"
+        params.append(int(hybrid_hwid_limit))
+    if hybrid_traffic_limit_gb is not None:
+        sets += ", hybrid_traffic_limit_gb = ?"
+        params.append(int(hybrid_traffic_limit_gb))
+    params.append(plan_id)
     cursor = _exec(
-        "UPDATE plans SET plan_name = ?, months = ?, price = ?, hwid_limit = ?, traffic_limit_gb = ?, button_style = ?, icon_emoji_id = ? WHERE plan_id = ?",
-        (plan_name, months, price, hwid_limit, traffic_limit_gb, button_style or None, icon_emoji_id or None, plan_id),
+        f"UPDATE plans SET {sets} WHERE plan_id = ?",
+        params,
         f"Не удалось обновить тариф {plan_id}"
     )
     if cursor and cursor.rowcount > 0: logging.info(f"Updated plan {plan_id}: name='{plan_name}', months={months}, price={price}, hwid={hwid_limit}, traffic={traffic_limit_gb}."); return True

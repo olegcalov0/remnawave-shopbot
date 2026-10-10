@@ -932,7 +932,7 @@ async def delete_user_device(user_id: int | str, hwid: str, host_name: str | Non
     resolved_id = await _resolve_user_id(user_id, host_name=host_name)
     if resolved_id is None or not hwid:
         return False
-        
+
     try:
         # Эндпоинт: POST /api/hwid/devices/delete
         # Body: { "userId": 123, "hwid": "..." }
@@ -940,17 +940,85 @@ async def delete_user_device(user_id: int | str, hwid: str, host_name: str | Non
             "userId": resolved_id,
             "hwid": hwid
         }
-        
+
         path = "/api/hwid/devices/delete"
-        
+
         if host_name:
             response = await _request_for_host(host_name, "POST", path, json_payload=payload, expected_status=(200, 204))
         else:
             response = await _request("POST", path, json_payload=payload, expected_status=(200, 204))
-            
+
         if response.status_code in (200, 201, 204):
             return True
         return False
     except Exception as e:
         logger.error(f"Remnawave: ошибка удаления устройства {hwid} (user {user_id}): {e}")
         return False
+
+
+# ===== HOST-AWARE методы для гибрида и докупки трафика (Этап 2 ТЗ, п.1) =====
+
+async def update_user_traffic_limit(
+    user_id: int | str,
+    traffic_limit_bytes: int,
+    *,
+    host_name: str | None = None,
+    traffic_limit_strategy: str | None = None,
+) -> bool:
+    """Host-aware изменение лимита trafficLimitBytes."""
+    if traffic_limit_bytes is None or int(traffic_limit_bytes) < 0:
+        return False
+    resolved_id = await _resolve_user_id(user_id, host_name=host_name)
+    if resolved_id is None:
+        return False
+    payload: dict[str, Any] = {"id": resolved_id, "trafficLimitBytes": int(traffic_limit_bytes)}
+    if traffic_limit_strategy:
+        payload["trafficLimitStrategy"] = traffic_limit_strategy
+    if host_name:
+        await _request_for_host(host_name, "PATCH", "/api/users", json_payload=payload)
+    else:
+        await _request("PATCH", "/api/users", json_payload=payload)
+    return True
+
+
+async def set_user_status_on_host(host_name: str, user_id: int | str, active: bool) -> bool:
+    """Host-aware enable/disable пользователя."""
+    resolved_id = await _resolve_user_id(user_id, host_name=host_name)
+    if resolved_id is None:
+        return False
+    action = "enable" if active else "disable"
+    await _request_for_host(host_name, "POST", f"/api/users/{resolved_id}/actions/{action}")
+    return True
+
+
+async def reset_user_traffic_on_host(host_name: str, user_id: int | str) -> bool:
+    """Host-aware сброс трафика пользователя."""
+    resolved_id = await _resolve_user_id(user_id, host_name=host_name)
+    if resolved_id is None:
+        return False
+    await _request_for_host(host_name, "POST", f"/api/users/{resolved_id}/actions/reset-traffic")
+    return True
+
+
+async def update_user_squad(host_name: str, user_id: int | str, squad_uuid: str) -> bool:
+    """Host-aware перевод пользователя в другой squad."""
+    resolved_id = await _resolve_user_id(user_id, host_name=host_name)
+    if resolved_id is None or not squad_uuid:
+        return False
+    await _request_for_host(
+        host_name, "PATCH", "/api/users",
+        json_payload={"id": resolved_id, "activeInternalSquads": [squad_uuid]})
+    return True
+
+
+async def get_user_traffic_usage(user_id: int | str, *, host_name: str | None = None) -> dict[str, Any] | None:
+    """Свежие limit/used по target user: {limit_bytes, used_bytes, status, expire_at}."""
+    user = await get_user_by_id(user_id, host_name=host_name)
+    if not user:
+        return None
+    return {
+        "limit_bytes": user.get("trafficLimitBytes"),
+        "used_bytes": user.get("usedTrafficBytes"),
+        "status": user.get("status"),
+        "expire_at": user.get("expireAt"),
+    }

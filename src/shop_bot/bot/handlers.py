@@ -82,7 +82,10 @@ from shop_bot.config import (
     get_msk_time
 )
 from shop_bot.data_manager import remnawave_repository as rw_repo
+from shop_bot.data_manager import traffic_repository as tr_repo
 from shop_bot.modules import remnawave_api
+from shop_bot.modules import utils_common as uc
+from shop_bot.modules import domain_constants as const
 
 TELEGRAM_BOT_USERNAME = None
 PAYMENT_METHODS = None
@@ -461,6 +464,14 @@ class SupportDialog(StatesGroup):
     waiting_for_subject = State()
     waiting_for_message = State()
     waiting_for_reply = State()
+
+# ===== СОСТОЯНИЯ ПОКУПКИ ТРАФИКА (Этап 5 ТЗ, п.2) =====
+# Отдельные FSM-состояния, не смешиваемые с PaymentProcess покупки тарифа
+class TrafficPurchaseProcess(StatesGroup):
+    waiting_for_type = State()
+    waiting_for_package_or_amount = State()
+    waiting_for_burnability = State()
+    waiting_for_confirm = State()
 
 # ===== ВАЛИДАЦИЯ EMAIL =====
 # Проверяет корректность введенного адреса электронной почты с помощью регулярного выражения
@@ -2177,8 +2188,15 @@ def get_user_router() -> Router:
             expiry, created, email, conn = datetime.fromisoformat(key_data['expiry_date']), datetime.fromisoformat(key_data['created_date']), key_data.get('key_email'), key_data.get('subscription_url') or "⏳ Загрузка..."
             all_keys = get_user_keys(user_id); key_num = next((i + 1 for i, k in enumerate(all_keys) if k['key_id'] == key_id), 0)
             text_cached = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit="...", hwid_usage="...", traffic_limit="...", traffic_used="...", comment=key_data.get('comment_key'))
-            
-            info_img, kb = get_setting("key_info_image"), keyboards.create_dynamic_key_info_keyboard(key_id, conn if conn != "⏳ Загрузка..." else "")
+
+            # Этап 5 ТЗ: доступность докупки для кнопки «Купить гигабайты»
+            from shop_bot.modules import traffic_service as _ts
+            try:
+                _types_available = _ts.available_traffic_types(key_id)
+            except Exception:
+                _types_available = []
+
+            info_img, kb = get_setting("key_info_image"), keyboards.create_dynamic_key_info_keyboard(key_id, conn if conn != "⏳ Загрузка..." else "", traffic_purchase_available=bool(_types_available))
             if state and (await state.get_data()).get('last_callback_query_id'):
                 try: await bot.answer_callback_query((await state.get_data())['last_callback_query_id'], text="✅ Обновлено!")
                 except: pass
@@ -2206,8 +2224,14 @@ def get_user_router() -> Router:
             tr_lim = (sub or {}).get('trafficLimitBytes', (sub or {}).get('trafficLimit'))
             tr_usg = (sub or {}).get('usedTrafficBytes', (sub or {}).get('trafficUsed'))
 
-            text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=tr_lim, traffic_used=tr_usg, comment=key_data.get('comment_key'))
-            kb_final = keyboards.create_dynamic_key_info_keyboard(key_id, conn)
+            # Этап 5 ТЗ: расширенная статистика WiFi/LTE (без раскрытия гибрида)
+            try:
+                traffic_stats = await _ts.get_key_traffic_stats(key_id)
+            except Exception:
+                traffic_stats = None
+
+            text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=tr_lim, traffic_used=tr_usg, comment=key_data.get('comment_key'), traffic_stats=traffic_stats)
+            kb_final = keyboards.create_dynamic_key_info_keyboard(key_id, conn, traffic_purchase_available=bool(_types_available))
 
             if prompt_message_id:
                 try:
@@ -2229,6 +2253,314 @@ def get_user_router() -> Router:
         except (IndexError, ValueError): return
         await refresh_key_info_internal(bot=bot, chat_id=callback.message.chat.id, message_to_edit=callback.message, key_id=kid, user_id=callback.from_user.id)
     # ===== Конец функции show_key_handler =====
+
+    # ===== НАЧАЛО ПОКУПКИ ТРАФИКА (Этап 5 ТЗ) =====
+    # Вход: кнопка «Купить гигабайты» в карточке ключа (callback buy_traffic_{key_id})
+    @user_router.callback_query(F.data.startswith("buy_traffic_"))
+    @anti_spam
+    @registration_required
+    async def buy_traffic_start(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        try:
+            key_id = int(callback.data[len("buy_traffic_"):])
+        except ValueError:
+            return await callback.answer("⚠️ Ошибка данных.", show_alert=True)
+
+        from shop_bot.modules import traffic_service as ts
+        key = rw_repo.get_key_by_id(key_id)
+        if not key or key.get('user_id') != callback.from_user.id:
+            return await callback.answer("❌ Ключ не найден.", show_alert=True)
+
+        types_available = ts.available_traffic_types(key_id)
+        if not types_available:
+            return await callback.answer("🚫 Докупка трафика недоступна для этой подписки.", show_alert=True)
+
+        stats = await ts.get_key_traffic_stats(key_id)
+        host = tr_repo.get_host_hybrid_settings(key.get('host_name')) or {}
+        wifi_name = host.get('wifi_traffic_name') or 'WiFi гигабайты'
+        lte_name = host.get('lte_traffic_name') or 'LTE гигабайты'
+
+        lines = ["🛒 <b>Покупка гигабайтов</b>\n"]
+        if stats.get("wifi"):
+            w = stats["wifi"]
+            lines.append(f"📡 <b>{wifi_name}:</b> {w.get('used_gb', 0):.1f} / {w.get('limit_gb') or '∞'} ГБ")
+        if stats.get("lte"):
+            l = stats["lte"]
+            lines.append(f"📶 <b>{lte_name}:</b> {l.get('used_gb', 0):.1f} / {l.get('limit_gb') or '∞'} ГБ")
+        if stats.get("wifi") and stats.get("lte"):
+            lines.append(f"<b>Σ Общий остаток: {stats.get('total_remaining_gb', 0):.1f} ГБ</b>")
+        lines.append("\nВыберите тип трафика:")
+
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder()
+        if "wifi" in types_available:
+            kb.button(text=f"📡 {wifi_name}", callback_data=f"traffic_type_{key_id}_wifi")
+        if "lte" in types_available:
+            kb.button(text=f"📶 {lte_name}", callback_data=f"traffic_type_{key_id}_lte")
+        kb.button(text="⬅️ Назад", callback_data=f"show_key_{key_id}")
+        kb.adjust(1)
+        await smart_edit_message(callback.message, "\n".join(lines), kb.as_markup())
+        await state.set_state(TrafficPurchaseProcess.waiting_for_type)
+        await state.update_data(traffic_key_id=key_id)
+    # ===== Конец функции buy_traffic_start =====
+
+    @user_router.callback_query(F.data.startswith("traffic_type_"))
+    @anti_spam
+    @registration_required
+    async def traffic_type_selected(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        try:
+            parts = callback.data.split("_")
+            key_id, traffic_type = int(parts[2]), parts[3]
+        except (IndexError, ValueError):
+            return await callback.answer("⚠️ Ошибка данных.", show_alert=True)
+        if traffic_type not in ("wifi", "lte"):
+            return await callback.answer("⚠️ Недопустимый тип.", show_alert=True)
+
+        from shop_bot.modules import traffic_service as ts
+        if traffic_type not in ts.available_traffic_types(key_id):
+            return await callback.answer("🚫 Этот тип недоступен.", show_alert=True)
+
+        data = await state.get_data()
+        if data.get("traffic_key_id") != key_id:
+            await state.update_data(traffic_key_id=key_id)
+
+        host_name = (rw_repo.get_key_by_id(key_id) or {}).get('host_name')
+        host = tr_repo.get_host_hybrid_settings(host_name) or {}
+        packages = tr_repo.list_traffic_packages(host_name, traffic_type, active_only=True)
+
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder()
+        lines = ["🛒 <b>Покупка гигабайтов</b>\n<b>Пакеты:</b>"]
+        if packages:
+            for pkg in packages:
+                kb.button(text=f"{pkg['gb_amount']} ГБ — {uc.money_to_str(pkg['price_rub'])} ₽",
+                          callback_data=f"traffic_pkg_{pkg['package_id']}")
+        else:
+            lines.append("Готовые пакеты не настроены.")
+        kb.button(text="✏️ Своё количество", callback_data=f"traffic_custom_{key_id}_{traffic_type}")
+        kb.button(text="⬅️ Назад", callback_data=f"buy_traffic_{key_id}")
+        kb.adjust(1)
+
+        name = host.get(f"{traffic_type}_traffic_name") or traffic_type
+        lines.append(f"\nВыберите пакет «{name}» или введите своё количество.")
+        await smart_edit_message(callback.message, "\n".join(lines), kb.as_markup())
+        await state.set_state(TrafficPurchaseProcess.waiting_for_package_or_amount)
+        await state.update_data(traffic_type=traffic_type)
+    # ===== Конец функции traffic_type_selected =====
+
+    @user_router.callback_query(F.data.startswith("traffic_pkg_"))
+    @anti_spam
+    @registration_required
+    async def traffic_package_selected(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        try:
+            package_id = int(callback.data[len("traffic_pkg_"):])
+        except ValueError:
+            return await callback.answer("⚠️ Ошибка данных.", show_alert=True)
+        pkg = tr_repo.get_traffic_package(package_id)
+        data = await state.get_data()
+        if not pkg or pkg.get("traffic_type") != data.get("traffic_type"):
+            return await callback.answer("⚠️ Пакет недоступен.", show_alert=True)
+        await _show_traffic_burnability(callback, state, gb_amount=int(pkg["gb_amount"]),
+                                        package_id=package_id)
+    # ===== Конец функции traffic_package_selected =====
+
+    @user_router.callback_query(F.data.startswith("traffic_custom_"))
+    @anti_spam
+    @registration_required
+    async def traffic_custom_selected(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder()
+        data = await state.get_data()
+        key_id = data.get("traffic_key_id")
+        kb.button(text="⬅️ Назад", callback_data=f"traffic_type_{key_id}_{data.get('traffic_type')}")
+        kb.adjust(1)
+        await smart_edit_message(
+            callback.message,
+            "✏️ <b>Своё количество</b>\n\nВведите количество гигабайтов (целое число от 1 до 1000):",
+            kb.as_markup())
+        await state.set_state(TrafficPurchaseProcess.waiting_for_package_or_amount)
+    # ===== Конец функции traffic_custom_selected =====
+
+    @user_router.message(TrafficPurchaseProcess.waiting_for_package_or_amount)
+    async def traffic_amount_input(message: types.Message, state: FSMContext):
+        if not message.text:
+            return
+        text = message.text.strip()
+        try:
+            gb = int(text)
+        except ValueError:
+            return await message.answer("⚠️ Введите целое число гигабайтов (1–1000).")
+        if not (1 <= gb <= 1000):
+            return await message.answer("⚠️ Количество должно быть от 1 до 1000 ГБ.")
+        await _show_traffic_burnability(message, state, gb_amount=gb, package_id=None)
+    # ===== Конец функции traffic_amount_input =====
+
+    async def _show_traffic_burnability(message_or_cb, state: FSMContext, *, gb_amount: int, package_id=None):
+        data = await state.get_data()
+        traffic_type = data.get("traffic_type")
+        key_id = data.get("traffic_key_id")
+        host_name = (rw_repo.get_key_by_id(key_id) or {}).get('host_name')
+        host = tr_repo.get_host_hybrid_settings(host_name) or {}
+        name = host.get(f"{traffic_type}_traffic_name") or traffic_type
+
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder()
+        burn_price = host.get(f"{traffic_type}_burnable_price_per_gb")
+        non_burn_price = host.get(f"{traffic_type}_non_burnable_price_per_gb")
+        if package_id:
+            pkg = tr_repo.get_traffic_package(package_id)
+            price = pkg.get("price_rub")
+            kb.button(text=f"🔥 {gb_amount} ГБ — {uc.money_to_str(price)} ₽", callback_data=f"traffic_buy_{gb_amount}_burn_1")
+        else:
+            if burn_price:
+                kb.button(text=f"🔥 Сгораемые ({uc.money_to_str(burn_price)} ₽/ГБ)",
+                          callback_data=f"traffic_buy_{gb_amount}_burn_1")
+            if non_burn_price:
+                kb.button(text=f"♻️ Несгораемые ({uc.money_to_str(non_burn_price)} ₽/ГБ)",
+                          callback_data=f"traffic_buy_{gb_amount}_burn_0")
+        kb.button(text="⬅️ Назад", callback_data=f"traffic_type_{key_id}_{traffic_type}")
+        kb.adjust(1)
+
+        text = (f"🛒 <b>Покупка гигабайтов</b>\n\n"
+                f"Тип: <b>{name}</b>\nКоличество: <b>{gb_amount} ГБ</b>\n\n"
+                f"Выберите тип гигабайтов:\n"
+                f"🔥 <b>Сгораемые</b> — увеличивают лимит до следующего сброса\n"
+                f"♻️ <b>Несгораемые</b> — сохраняют остаток при сбросе")
+        if isinstance(message_or_cb, types.CallbackQuery):
+            await smart_edit_message(message_or_cb.message, text, kb.as_markup())
+        else:
+            await message_or_cb.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await state.set_state(TrafficPurchaseProcess.waiting_for_burnability)
+        await state.update_data(gb_amount=gb_amount, package_id=package_id)
+
+    @user_router.callback_query(F.data.startswith("traffic_buy_"))
+    @anti_spam
+    @registration_required
+    async def traffic_confirm_and_pay(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+        await callback.answer()
+        try:
+            parts = callback.data.split("_")
+            gb_amount, non_burnable = int(parts[2]), parts[3] == "1"
+        except (IndexError, ValueError):
+            return await callback.answer("⚠️ Ошибка данных.", show_alert=True)
+
+        data = await state.get_data()
+        key_id = data.get("traffic_key_id")
+        traffic_type = data.get("traffic_type")
+        package_id = data.get("package_id")
+
+        from shop_bot.modules import traffic_service as ts
+        # серверная валидация: повторное чтение данных, а не доверие callback
+        try:
+            await ts.validate_before_payment(
+                user_id=callback.from_user.id, key_id=key_id,
+                traffic_type=traffic_type, gb_amount=gb_amount, non_burnable=non_burnable)
+        except ts.TrafficPurchaseError as exc:
+            return await callback.answer(f"🚫 {exc}", show_alert=True)
+
+        referral_discount_pct = Decimal("0")
+        discount_applies = False
+        try:
+            if (get_setting("referral_discount_applies_to_traffic") or "0") == "1":
+                u = get_user(callback.from_user.id) or {}
+                if u.get('referred_by'):
+                    referral_discount_pct = Decimal(get_setting("referral_discount") or "0")
+                    discount_applies = referral_discount_pct > 0
+        except Exception:
+            pass
+
+        package = tr_repo.get_traffic_package(package_id) if package_id else None
+        host_name = (rw_repo.get_key_by_id(key_id) or {}).get('host_name')
+        pricing = ts.calculate_price(
+            host_name=host_name, traffic_type=traffic_type, gb_amount=gb_amount,
+            non_burnable=non_burnable, package=package,
+            referral_discount_percent=referral_discount_pct,
+            referral_discount_applies=discount_applies)
+
+        host = tr_repo.get_host_hybrid_settings(host_name) or {}
+        name = host.get(f"{traffic_type}_traffic_name") or traffic_type
+        burn_str = "несгораемые" if non_burnable else "сгораемые"
+
+        # создание purchase draft + pending payment (источник истины — БД)
+        payment_id = f"traffic-{uuid.uuid4().hex[:16]}"
+        draft_meta = {
+            "action": "traffic_purchase", "payment_id": payment_id,
+            "user_id": callback.from_user.id, "key_id": key_id,
+            "traffic_type": traffic_type, "gb_amount": gb_amount,
+            "is_non_burnable": non_burnable, "package_id": package_id,
+            "price": float(pricing["payable_rub"]),
+            "host_name": host_name,
+        }
+        try:
+            purchase_id = ts.create_purchase_draft(
+                payment_id=payment_id, user_id=callback.from_user.id, key_id=key_id,
+                traffic_type=traffic_type, gb_amount=gb_amount, non_burnable=non_burnable,
+                source_kind="package" if package else "custom", package=package, pricing=pricing)
+            if purchase_id is None:
+                return await callback.answer("⚠️ Не удалось создать черновик покупки.", show_alert=True)
+            create_payload_pending(payment_id, callback.from_user.id, float(pricing["payable_rub"]), draft_meta)
+        except Exception as e:
+            logger.error(f"traffic purchase draft: {e}", exc_info=True)
+            return await callback.answer("⚠️ Ошибка создания счёта.", show_alert=True)
+
+        text = (f"✅ <b>Подтверждение покупки</b>\n\n"
+                f"Тип: <b>{name}</b>\n"
+                f"Количество: <b>{gb_amount} ГБ</b> ({burn_str})\n"
+                f"Скидка: {uc.money_to_str(pricing.get('discount_rub', 0))} ₽\n"
+                f"<b>Итого: {uc.money_to_str(pricing['payable_rub'])} ₽</b>\n\n"
+                f"Выберите способ оплаты:")
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💰 Баланс", callback_data=f"traffic_pay_balance_{payment_id}")
+        kb.button(text="⬅️ Отмена", callback_data=f"show_key_{key_id}")
+        kb.adjust(1)
+        await smart_edit_message(callback.message, text, kb.as_markup())
+        await state.set_state(TrafficPurchaseProcess.waiting_for_confirm)
+        await state.update_data(payment_id=payment_id)
+    # ===== Конец функции traffic_confirm_and_pay =====
+
+    @user_router.callback_query(F.data.startswith("traffic_pay_balance_"))
+    @anti_spam
+    @registration_required
+    async def traffic_pay_by_balance(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+        await callback.answer()
+        payment_id = callback.data[len("traffic_pay_balance_"):]
+        purchase = tr_repo.get_traffic_purchase(payment_id)
+        if not purchase:
+            return await callback.answer("⚠️ Счёт не найден.", show_alert=True)
+        if purchase['user_id'] != callback.from_user.id:
+            return await callback.answer("❌ Доступ запрещён.", show_alert=True)
+        if purchase['status'] not in (const.PURCHASE_CREATED,):
+            return await callback.answer("ℹ️ Счёт уже обработан.", show_alert=True)
+
+        price = float(purchase['total_price_rub'])
+        balance = get_balance(callback.from_user.id) or 0
+        if balance < price:
+            return await callback.answer(f"🚫 Недостаточно средств: {balance:.2f} / {price:.2f} ₽", show_alert=True)
+
+        from shop_bot.modules import fulfillment as ff
+        if not deduct_from_balance(callback.from_user.id, price):
+            return await callback.answer("⚠️ Ошибка списания баланса.", show_alert=True)
+        # переводим purchase в paid и ставим fulfillment job (единый поток)
+        tr_repo.transition_purchase_status(payment_id, (const.PURCHASE_CREATED,), const.PURCHASE_PAID)
+        meta = {
+            "action": "traffic_purchase", "payment_id": payment_id,
+            "user_id": callback.from_user.id, "key_id": purchase['key_id'],
+            "traffic_type": purchase['traffic_type'], "gb_amount": purchase['gb_amount'],
+            "is_non_burnable": bool(purchase['is_non_burnable']),
+            "price": price, "host_name": purchase['host_name'],
+            "payment_method": "Balance",
+        }
+        ff.confirm_payment_and_enqueue("Balance", payment_id, meta)
+        await smart_edit_message(
+            callback.message,
+            "✅ <b>Оплата принята!</b>\nГигабайты начисляются автоматически. Вы получите уведомление.",
+            keyboards.create_back_to_menu_keyboard())
+        await state.clear()
+    # ===== Конец функции traffic_pay_by_balance =====
 
     # ===== НАЧАЛО ПЕРЕНОСА КЛЮЧА НА ДРУГОЙ СЕРВЕР =====
     # Предоставляет выбор доступных серверов для миграции текущего ключа
@@ -3521,16 +3853,55 @@ async def process_successful_payment(bot: Bot | None, metadata: dict) -> bool:
 
             # Получаем внешний сквад для seller (если пользователь - seller)
             external_squad = get_seller_external_squad(uid)
-            
-            res = await remnawave_api.create_or_update_key_on_host(
-                host_name=host, 
-                email=c_email, 
-                days_to_add=days, 
-                telegram_id=uid, 
-                hwid_limit=hw_lim, 
-                traffic_limit_gb=tr_lim_gb,
-                external_squad_uuid=external_squad
-            )
+
+            # Гибридный режим хоста: saga-создание primary+hybrid одной парой (Этап 2 ТЗ)
+            from shop_bot.modules import hybrid_service as _hs
+            _host_hybrid = tr_repo.get_host_hybrid_settings(host) or {}
+            _plan_obj = get_plan_by_id(plan_id) if plan_id else None
+            if int(_host_hybrid.get("hybrid_enabled") or 0) == 1 and action == "new":
+                from datetime import timedelta as _td
+                import shop_bot.modules.utils_common as _uc
+                _expire_dt = _uc.get_msk_time() + _td(days=days)
+                try:
+                    _primary_payload = await _hs.create_hybrid_subscription(
+                        host_name=host, user_id=uid, telegram_id=uid,
+                        telegram_username=(get_user(uid) or {}).get('username'),
+                        expire_at=_expire_dt,
+                        base_traffic_limit_bytes=uc.gb_to_bytes(tr_lim_gb) if tr_lim_gb else None,
+                        hybrid_traffic_limit_bytes=uc.gb_to_bytes(int(_plan_obj.get("hybrid_traffic_limit_gb") or 0)) if _plan_obj and _plan_obj.get("hybrid_traffic_limit_gb") else None,
+                        base_hwid_limit=hw_lim,
+                        hybrid_hwid_limit=int(_plan_obj.get("hybrid_hwid_limit") or 0) if _plan_obj else None,
+                        traffic_limit_strategy=_host_hybrid.get("traffic_limit_strategy") or "NO_RESET",
+                        primary_email=c_email,
+                        tag=metadata.get("tag"),
+                    )
+                except _hs.HybridCreationError as exc:
+                    logger.error("Гибрид: ошибка создания пары для %s: %s", uid, exc)
+                    _primary_payload = None
+                if _primary_payload:
+                    res = {
+                        'client_uuid': _primary_payload.get('id'),
+                        'short_uuid': _primary_payload.get('shortUuid'),
+                        'email': c_email, 'host_name': host,
+                        'squad_uuid': _host_hybrid.get("squad_uuid") or '',
+                        'subscription_url': remnawave_api.extract_subscription_url(_primary_payload) or '',
+                        'traffic_limit_bytes': _primary_payload.get('trafficLimitBytes'),
+                        'traffic_limit_strategy': _primary_payload.get('trafficLimitStrategy'),
+                        'expiry_timestamp_ms': int(_expire_dt.timestamp() * 1000),
+                        'connection_string': remnawave_api.extract_subscription_url(_primary_payload) or '',
+                    }
+                else:
+                    res = None
+            else:
+                res = await remnawave_api.create_or_update_key_on_host(
+                    host_name=host,
+                    email=c_email,
+                    days_to_add=days,
+                    telegram_id=uid,
+                    hwid_limit=hw_lim,
+                    traffic_limit_gb=tr_lim_gb,
+                    external_squad_uuid=external_squad
+                )
             if not res:
                 add_to_balance(uid, float(price))
                 logger.error(f"Возврат средств: {price} RUB возвращено пользователю {uid} (ошибка API VPN на хосте {host})")

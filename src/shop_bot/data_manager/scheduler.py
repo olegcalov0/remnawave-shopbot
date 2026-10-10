@@ -35,6 +35,8 @@ _last_speedtests_run_at: datetime | None = None
 _last_backup_run_at: datetime | None = None
 _last_resource_collect_at: datetime | None = None
 _last_resource_alert_at: dict[tuple[str, str, str], datetime] = {}
+_last_traffic_reset_at: datetime | None = None
+_last_low_traffic_notify_at: datetime | None = None
 
 def format_time_left(hours: int) -> str:
     if hours >= 24:
@@ -167,6 +169,33 @@ async def sync_keys_with_panels():
                 continue
             remote_by_email[raw_email.lower()] = (raw_email, remote_user)
 
+        # Гибридные пары хоста: не создавать второй vpn_keys из hybrid panel user (Этап 2 ТЗ, п.6)
+        from shop_bot.data_manager import traffic_repository as tr_repo
+        from shop_bot.modules import domain_constants as const
+        hybrid_emails: set[str] = set()
+        hybrid_user_ids: set[str] = set()
+        pairs = tr_repo.list_active_pairs(host_name)
+        for pair in pairs:
+            h_email = (pair.get('hybrid_email') or '').lower()
+            if h_email:
+                hybrid_emails.add(h_email)
+                remote_by_email.pop(h_email, None)
+            if pair.get('hybrid_remnawave_user_id'):
+                hybrid_user_ids.add(str(pair['hybrid_remnawave_user_id']))
+            # проверка пропажи стороны: primary/hybrid должны существовать в панели
+            p_alive = any(
+                str((ru or {}).get('id')) == str(pair.get('primary_remnawave_user_id'))
+                for ru in (remote_users or [])
+            )
+            # hybrid может быть в другом squad — проверяем по обоим спискам ниже
+        # отдельно: убрать hybrid users по ID из remote_by_email (squad-фильтр мог их скрыть)
+        for rem_email_norm in list(remote_by_email.keys()):
+            rem_email, rem_user = remote_by_email[rem_email_norm]
+            rem_uuid = str(rem_user.get('uuid') or rem_user.get('id') or rem_user.get('client_uuid') or '')
+            if rem_uuid and rem_uuid in hybrid_user_ids:
+                hybrid_emails.add(rem_email_norm)
+                remote_by_email.pop(rem_email_norm, None)
+
         keys_in_db = rw_repo.get_keys_for_host(host_name) or []
         now = get_msk_time().replace(tzinfo=None)
 
@@ -226,19 +255,33 @@ async def sync_keys_with_panels():
                     expiry_date = None
 
             if expiry_date and expiry_date < now - timedelta(days=5):
-                logger.debug(
-                    "Scheduler: Ключ '%s' (host '%s') просрочен более 5 дней. Удаляю пользователя из Remnawave и БД.",
-                    raw_email,
-                    host_name,
-                )
-                try:
-                    await remnawave_api.delete_client_on_host(host_name, remote_email or raw_email)
-                except Exception as exc:
-                    logger.error(
-                        "Scheduler: Не удалось удалить пользователя '%s' из Remnawave: %s",
+                # гибридные пары: не удалять primary автоматически — repair job (Этап 2 ТЗ)
+                pair_for_key = tr_repo.get_pair_by_primary_key(db_key.get('key_id') or 0)
+                if pair_for_key and pair_for_key.get('status') in ('active', 'repair_required'):
+                    try:
+                        from shop_bot.modules import hybrid_service
+                        await hybrid_service.delete_pair_users(pair_for_key)
+                        logger.info(
+                            "Scheduler: Удалена просроченная гибридная пара для '%s' (key %s).",
+                            raw_email, pair_for_key.get('primary_key_id'),
+                        )
+                    except Exception as exc:
+                        logger.error("Scheduler: Ошибка удаления пары для '%s': %s", raw_email, exc)
+                        tr_repo.update_pair_status(pair_for_key['pair_id'], 'repair_required', error=str(exc))
+                else:
+                    logger.debug(
+                        "Scheduler: Ключ '%s' (host '%s') просрочен более 5 дней. Удаляю пользователя из Remnawave и БД.",
                         raw_email,
-                        exc,
+                        host_name,
                     )
+                    try:
+                        await remnawave_api.delete_client_on_host(host_name, remote_email or raw_email)
+                    except Exception as exc:
+                        logger.error(
+                            "Scheduler: Не удалось удалить пользователя '%s' из Remnawave: %s",
+                            raw_email,
+                            exc,
+                        )
                 if rw_repo.delete_key_by_email(raw_email):
                     total_affected_records += 1
                 continue
@@ -281,6 +324,13 @@ async def sync_keys_with_panels():
 
         if remote_by_email:
             for normalized_email, (remote_email, remote_user) in remote_by_email.items():
+                # гибридные panel users не должны становиться отдельными ключами
+                if normalized_email in hybrid_emails:
+                    logger.debug(
+                        "Scheduler: '%s' — пользователь гибридной пары, вторая подписка не создаётся.",
+                        remote_email,
+                    )
+                    continue
                 import re
 
                 # Пытаемся найти user_id разными способами
@@ -477,6 +527,24 @@ async def periodic_subscription_check(bot_controller: BotController):
         try:
             await sync_keys_with_panels()
 
+            # fulfillment retry worker (Этап 3/8 ТЗ)
+            try:
+                bot_for_jobs = bot_controller.get_bot_instance() if bot_controller.get_status().get("is_running") else None
+                from shop_bot.modules import fulfillment as fulfillment_mod
+                await fulfillment_mod.run_fulfillment_worker(bot_for_jobs)
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка fulfillment worker: {e}", exc_info=True)
+
+            # daily traffic reset + expiry burn (Этап 4/8 ТЗ)
+            try:
+                await _maybe_run_daily_traffic_reset()
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка daily traffic reset: {e}", exc_info=True)
+
+            try:
+                await _maybe_run_low_traffic_notifications(bot_controller)
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка low-traffic notifications: {e}", exc_info=True)
 
             await _maybe_run_periodic_speedtests()
 
@@ -503,6 +571,109 @@ async def periodic_subscription_check(bot_controller: BotController):
             
         logger.info(f"Scheduler: Цикл завершён. Следующая проверка через {CHECK_INTERVAL_SECONDS} сек.")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+async def _maybe_run_daily_traffic_reset():
+    """Раз в сутки: догоняющая обработка индивидуальных reset + сгорание истёкших подписок."""
+    global _last_traffic_reset_at
+    now = get_msk_time()
+    if _last_traffic_reset_at and (now - _last_traffic_reset_at).total_seconds() < 20 * 3600:
+        return
+    from shop_bot.modules import traffic_service
+    from shop_bot.data_manager import traffic_repository as tr_repo
+    from shop_bot.modules import domain_constants as const
+
+    processed = await traffic_service.run_daily_resets()
+    # expiry burn: истёкшие подписки теряют carry
+    try:
+        keys = rw_repo.get_all_keys() or []
+        for key in keys:
+            expire_raw = key.get('expiry_date') or key.get('expire_at')
+            expire = None
+            if expire_raw:
+                try:
+                    expire = datetime.fromisoformat(str(expire_raw).replace('Z', '+00:00'))
+                except Exception:
+                    expire = None
+            if expire and expire < now.replace(tzinfo=None):
+                await traffic_service.burn_expired_carry(
+                    int(key['key_id']), const.ROLE_PRIMARY, const.TRAFFIC_TYPE_WIFI)
+                pair = tr_repo.get_pair_by_primary_key(int(key['key_id']))
+                if pair:
+                    await traffic_service.burn_expired_carry(
+                        int(key['key_id']), const.ROLE_HYBRID, const.TRAFFIC_TYPE_LTE)
+    except Exception as e:
+        logger.error(f"Scheduler: Ошибка expiry burn: {e}", exc_info=True)
+    _last_traffic_reset_at = now
+    if processed:
+        logger.info(f"Scheduler: Traffic reset обработано записей: {processed}")
+
+
+async def _maybe_run_low_traffic_notifications(bot_controller):
+    """Уведомления низкого/нулевого трафика: раз в сутки, анти-спам (Этап 5, п.7)."""
+    global _last_low_traffic_notify_at
+    now = get_msk_time()
+    if _last_low_traffic_notify_at and (now - _last_low_traffic_notify_at).total_seconds() < 20 * 3600:
+        return
+    _last_low_traffic_notify_at = now
+
+    bot = bot_controller.get_bot_instance() if bot_controller.get_status().get("is_running") else None
+    if not bot:
+        return
+
+    from shop_bot.modules import traffic_service
+    from shop_bot.data_manager import traffic_repository as tr_repo
+
+    try:
+        keys = rw_repo.get_all_keys() or []
+    except Exception:
+        return
+    for key in keys:
+        try:
+            key_id = int(key.get('key_id') or 0)
+            if not key_id:
+                continue
+            stats = await traffic_service.get_key_traffic_stats(key_id)
+            if not stats.get("available"):
+                continue
+            host = tr_repo.get_host_hybrid_settings(key.get('host_name')) or {}
+            threshold_pct = int(host.get('low_traffic_threshold_percent') or 10)
+            uid = int(key.get('user_id') or 0)
+            if not uid or str(uid).startswith("999"):
+                continue
+            for ttype, block in (("wifi", stats.get("wifi")), ("lte", stats.get("lte"))):
+                if not block:
+                    continue
+                limit = int(block.get("limit_bytes") or 0)
+                if limit <= 0:
+                    continue
+                remaining_pct = (int(block.get("remaining_bytes") or 0) / limit) * 100
+                if remaining_pct > threshold_pct:
+                    continue
+                name = stats.get(f"{ttype}_name") or ttype
+                if int(block.get("remaining_bytes") or 0) <= 0:
+                    text = (f"📉 <b>Трафик закончился</b>\n"
+                            f"{name}: доступный объём исчерпан.")
+                else:
+                    text = (f"⚠️ <b>Мало трафика</b>\n"
+                            f"{name}: осталось {block.get('remaining_gb', 0):.1f} ГБ.")
+                if stats.get("purchase_enabled"):
+                    from aiogram.utils.keyboard import InlineKeyboardBuilder
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="🛒 Купить гигабайты", callback_data=f"buy_traffic_{key_id}")
+                    kb.adjust(1)
+                    try:
+                        await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb.as_markup())
+                    except Exception:
+                        pass
+                else:
+                    text += "\nОбъём обновится при следующем сбросе или продлении."
+                    try:
+                        await bot.send_message(uid, text, parse_mode="HTML")
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"Scheduler: low-traffic notify ошибка для key {key.get('key_id')}: {e}")
+
 
 async def _maybe_run_periodic_speedtests():
     global _last_speedtests_run_at
@@ -681,7 +852,8 @@ async def _maybe_run_daily_backup(bot: Bot):
     if _last_backup_run_at and (now - _last_backup_run_at).total_seconds() < interval_seconds:
         return
     try:
-        zip_path = backup_manager.create_backup_file()
+        # Этап 8 ТЗ: перед архивом собираем снимки состояния Remnawave
+        zip_path = await backup_manager.create_backup_with_snapshots(bot, source="scheduled")
         if zip_path and zip_path.exists():
             try:
                 sent = await backup_manager.send_backup_to_admins(bot, zip_path)

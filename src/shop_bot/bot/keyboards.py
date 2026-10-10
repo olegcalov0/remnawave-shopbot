@@ -1084,9 +1084,26 @@ def create_dynamic_support_menu_keyboard() -> InlineKeyboardMarkup:
     """Create support menu keyboard using dynamic configuration"""
     return create_dynamic_keyboard("support_menu")
 
-def create_dynamic_key_info_keyboard(key_id: int, connection_string: str | None = None) -> InlineKeyboardMarkup:
-    """Create key info keyboard using dynamic configuration"""
-    return create_dynamic_keyboard("key_info_menu", key_id=key_id, connection_string=connection_string)
+def create_dynamic_key_info_keyboard(key_id: int, connection_string: str | None = None, traffic_purchase_available: bool = False) -> InlineKeyboardMarkup:
+    """Create key info keyboard using dynamic configuration.
+
+    Этап 5 ТЗ: условная кнопка «Купить гигабайты» (buy_traffic_{key_id}),
+    показывается только если докупка доступна для ключа.
+    """
+    markup = create_dynamic_keyboard("key_info_menu", key_id=key_id, connection_string=connection_string)
+    if traffic_purchase_available:
+        try:
+            button = InlineKeyboardButton(text="🛒 Купить гигабайты", callback_data=f"buy_traffic_{key_id}")
+            rows = list(markup.inline_keyboard)
+            # вставляем перед последней строкой («Назад»)
+            if rows:
+                rows.insert(max(0, len(rows) - 1), [button])
+            else:
+                rows = [[button]]
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+        except Exception as e:
+            logger.error(f"key_info keyboard: не удалось добавить кнопку докупки: {e}")
+    return markup
 
 def create_back_to_profile_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
