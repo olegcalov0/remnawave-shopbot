@@ -505,19 +505,69 @@ fi
 
 echo ""
 
+# FIX (bootstrap chicken-and-egg): certbot --nginx требует существующий server block
+# с server_name, но SSL-конфиг пишется только ПОСЛЕ выпуска сертификата.
+# Решение: перед выпуском создаём временный HTTP server block, certbot находит его,
+# ставит сертификат и добавляет redirect; финальный SSL-конфиг запишет configure_nginx.
+ensure_bootstrap_server_block() {
+    local domain="$1"
+    # пропускаем, если уже есть конфигурация с этим server_name
+    if grep -rqs "server_name ${domain};" /etc/nginx/sites-enabled/; then
+        return 0
+    fi
+    log_info "Создание временного HTTP server block для ${domain} (для certbot)..."
+    sudo tee "$NGINX_CONF" >/dev/null <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+    location / {
+        proxy_pass http://127.0.0.1:1488;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    if [[ ! -L "$NGINX_LINK" ]]; then
+        sudo ln -s "$NGINX_CONF" "$NGINX_LINK" 2>/dev/null || true
+    fi
+    run_with_spinner "Проверка конфигурации Nginx (bootstrap)" sudo nginx -t || {
+        # откат, чтобы не оставить сломанный конфиг
+        sudo rm -f "$NGINX_LINK" "$NGINX_CONF"
+        log_error "Некорректная bootstrap-конфигурация Nginx"
+        exit 1
+    }
+    run_with_spinner "Перезагрузка Nginx (bootstrap)" sudo systemctl reload nginx || {
+        sudo rm -f "$NGINX_LINK" "$NGINX_CONF"
+        log_error "Не удалось перезагрузить Nginx"
+        exit 1
+    }
+}
+
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "SSL сертификаты уже существуют для $DOMAIN"
 else
     log_info "Выпуск SSL сертификата от Let's Encrypt для $DOMAIN..."
     
+    ensure_bootstrap_server_block "$DOMAIN"
+    
     run_with_animated_spinner "Получение сертификата (может занять время)" \
         sudo bash -c "certbot --nginx -d $DOMAIN --email $EMAIL --agree-tos --non-interactive --redirect --no-eff-email 2>&1" || {
-        log_error "Не удалось получить SSL сертификат. Проверьте:"
-        log_error "  - Домен правильно указан"
-        log_error "  - Домен указывает на этот сервер ($SERVER_IP)"
-        log_error "  - Порты 80 и 443 открыты"
-        log_error "  - Email правильный"
-        exit 1
+        # сертификат мог быть получен, но не установлен: проверяем наличие файлов
+        if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
+            log_warn "Сертификат получен, но certbot не смог его установить в Nginx."
+            log_warn "Продолжаем: финальная SSL-конфигурация будет записана следующим шагом."
+        else
+            log_error "Не удалось получить SSL сертификат. Проверьте:"
+            log_error "  - Домен правильно указан"
+            log_error "  - Домен указывает на этот сервер ($SERVER_IP)"
+            log_error "  - Порты 80 и 443 открыты"
+            log_error "  - Email правильный"
+            log_error "  - Подробности: sudo tail -50 /var/log/letsencrypt/letsencrypt.log"
+            exit 1
+        fi
     }
 fi
 
