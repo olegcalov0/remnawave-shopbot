@@ -1,7 +1,7 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Р¦РІРµС‚РѕРІР°СЏ РїР°Р»РёС‚СЂР°
+# Цветовая палитра
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,10 +11,10 @@ PURPLE='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# РќР°СЃС‚СЂРѕР№РєРё РїСЂРѕРµРєС‚Р°
+# Настройки проекта
 PROJECT_NAME="remnawave-shopbot"
-# FIX: СЂР°РЅСЊС€Рµ РїСѓС‚СЊ Р±С‹Р» РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅС‹Рј Рё СѓРґР°Р»РµРЅРёРµ РЅРµ РЅР°С…РѕРґРёР»Рѕ РїСЂРѕРµРєС‚,
-# РµСЃР»Рё СЃРєСЂРёРїС‚ Р·Р°РїСѓСЃРєР°Р»СЃСЏ РЅРµ РёР· $HOME
+# FIX: раньше путь был относительным и удаление не находило проект,
+# если скрипт запускался не из $HOME
 PROJECT_DIR="$HOME/$PROJECT_NAME"
 if [[ ! -d "$PROJECT_DIR" ]] && [[ -d "./$PROJECT_NAME" ]]; then
     PROJECT_DIR="$(pwd)/$PROJECT_NAME"
@@ -22,7 +22,7 @@ fi
 NGINX_CONF="/etc/nginx/sites-available/${PROJECT_NAME}.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_NAME}.conf"
 
-# РџРµСЂРµРјРµРЅРЅС‹Рµ СѓРґР°Р»РµРЅРёСЏ
+# Переменные удаления
 REMOVE_CONFIG=false
 REMOVE_DOCKER=false
 REMOVE_PROJECT=false
@@ -31,22 +31,22 @@ REMOVE_SSL=false
 REMOVE_ALL=false
 local_db_backup=""
 
-# --- Р¤СѓРЅРєС†РёРё РѕС‚РѕР±СЂР°Р¶РµРЅРёСЏ ---
+# --- Функции отображения ---
 
 show_header() {
     clear
-    echo -e "${PURPLE}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
-    echo -e "${PURPLE}${BOLD}        REMNAWAVE SHOPBOT UNINSTALLER (РЈРґР°Р»РµРЅРёРµ)             ${NC}"
-    echo -e "${PURPLE}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${PURPLE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${PURPLE}${BOLD}        REMNAWAVE SHOPBOT UNINSTALLER (Удаление)             ${NC}"
+    echo -e "${PURPLE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
 show_footer() {
-    echo -e "${CYAN}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
-    echo -e "${CYAN}Р РµРїРѕР·РёС‚РѕСЂРёР№:${NC}  https://github.com/CyberERROR/remnawave-shopbot"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}Репозиторий:${NC}  https://github.com/CyberERROR/remnawave-shopbot"
     echo -e "${CYAN}Telegram:${NC}      https://t.me/+7hUhNxAdzBpjNWRi"
-    echo -e "${CYAN}Р Р°Р·СЂР°Р±РѕС‚С‡РёРє:${NC}   https://github.com/CyberERROR"
-    echo -e "${CYAN}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${CYAN}Разработчик:${NC}   https://github.com/CyberERROR"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
@@ -55,7 +55,7 @@ log_info() {
 }
 
 log_success() {
-    echo -e "${GREEN}${BOLD}[вњ”]${NC} $1"
+    echo -e "${GREEN}${BOLD}[✔]${NC} $1"
 }
 
 log_warn() {
@@ -63,25 +63,25 @@ log_warn() {
 }
 
 log_error() {
-    echo -e "${RED}${BOLD}[вњ] РћС€РёР±РєР°:${NC} $1" >&2
+    echo -e "${RED}${BOLD}[✘] Ошибка:${NC} $1" >&2
 }
 
 log_input() {
     echo -ne "${CYAN}${BOLD}[?]${NC} $1"
 }
 
-# Р¤СѓРЅРєС†РёСЏ СЃРїРёРЅРЅРµСЂР° СЃ РёРЅС„РѕСЂРјР°С†РёРµР№ Рѕ РїСЂРѕС†РµСЃСЃРµ
+# Функция спиннера с информацией о процессе
 run_with_spinner() {
     local message="$1"
     shift
     local cmd=("$@")
 
-    echo -ne "${BLUE}${BOLD}[вћњ]${NC} ${message}... "
+    echo -ne "${BLUE}${BOLD}[➜]${NC} ${message}... "
 
     local temp_log
     temp_log=$(mktemp)
     
-    # Р—Р°РїСѓСЃРєР°РµРј РєРѕРјР°РЅРґСѓ
+    # Запускаем команду
     if "${cmd[@]}" > "$temp_log" 2>&1; then
         echo -e "${GREEN}${BOLD}OK${NC}"
         rm -f "$temp_log"
@@ -99,30 +99,30 @@ run_with_spinner() {
 
 on_error() {
     echo ""
-    log_error "РЎРєСЂРёРїС‚ РїСЂРµСЂРІР°РЅ РЅР° СЃС‚СЂРѕРєРµ $1."
+    log_error "Скрипт прерван на строке $1."
     exit 1
 }
 trap 'on_error $LINENO' ERR
 
-# --- РћСЃРЅРѕРІРЅС‹Рµ С„СѓРЅРєС†РёРё СѓРґР°Р»РµРЅРёСЏ ---
+# --- Основные функции удаления ---
 
 ensure_sudo_refresh() {
     if ! sudo -v; then
-        log_error "РўСЂРµР±СѓСЋС‚СЃСЏ РїСЂР°РІР° sudo. Р’РІРµРґРёС‚Рµ РїР°СЂРѕР»СЊ РІС‹С€Рµ."
+        log_error "Требуются права sudo. Введите пароль выше."
         exit 1
     fi
 }
 show_menu() {
     echo ""
-    echo -e "${YELLOW}${BOLD}Р§С‚Рѕ РІС‹ С…РѕС‚РёС‚Рµ СѓРґР°Р»РёС‚СЊ?${NC}"
+    echo -e "${YELLOW}${BOLD}Что вы хотите удалить?${NC}"
     echo ""
-    echo -e " ${CYAN}1)${NC} РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx Рё СЃРµСЂС‚РёС„РёРєР°С‚С‹ (${CYAN}Р±С‹СЃС‚СЂРѕРµ СѓРґР°Р»РµРЅРёРµ${NC})"
-    echo -e " ${CYAN}2)${NC} РџРѕР»РЅРѕРµ СѓРґР°Р»РµРЅРёРµ РїСЂРёР»РѕР¶РµРЅРёСЏ (РєРѕРЅС„РёРі + РїСЂРѕРµРєС‚ + РєРѕРЅС‚РµР№РЅРµСЂС‹)"
-    echo -e " ${CYAN}3)${NC} РњР°РєСЃРёРјР°Р»СЊРЅРѕРµ СѓРґР°Р»РµРЅРёРµ (РІСЃС‘ + Certbot + Р·Р°РІРёСЃРёРјРѕСЃС‚Рё)"
-    echo -e " ${CYAN}4)${NC} РќР°СЃС‚СЂРѕРёС‚СЊ РІСЂСѓС‡РЅСѓСЋ"
-    echo -e " ${CYAN}0)${NC} РћС‚РјРµРЅР°"
+    echo -e " ${CYAN}1)${NC} Конфигурация Nginx и сертификаты (${CYAN}быстрое удаление${NC})"
+    echo -e " ${CYAN}2)${NC} Полное удаление приложения (конфиг + проект + контейнеры)"
+    echo -e " ${CYAN}3)${NC} Максимальное удаление (всё + Certbot + зависимости)"
+    echo -e " ${CYAN}4)${NC} Настроить вручную"
+    echo -e " ${CYAN}0)${NC} Отмена"
     echo ""
-    log_input "Р’С‹Р±РµСЂРёС‚Рµ РІР°СЂРёР°РЅС‚ [0-4] (default: 0): "
+    log_input "Выберите вариант [0-4] (default: 0): "
     read -r -n1 CHOICE < /dev/tty || true
     echo ""
     
@@ -153,40 +153,40 @@ show_menu() {
             show_custom_menu
             ;;
         0)
-            log_error "РЈРґР°Р»РµРЅРёРµ РѕС‚РјРµРЅРµРЅРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»РµРј."
+            log_error "Удаление отменено пользователем."
             exit 0
             ;;
         *)
-            log_warn "РќРµРІРµСЂРЅС‹Р№ РІС‹Р±РѕСЂ. РћС‚РјРµРЅР°."
+            log_warn "Неверный выбор. Отмена."
             exit 1
             ;;
     esac
     
-    # РџРµСЂРµРґ СѓРґР°Р»РµРЅРёРµРј РєР°С‚Р°Р»РѕРіР° РїСЂРѕРµРєС‚Р°: СЃРѕС…СЂР°РЅРёС‚СЊ Р‘Р” Рё Р±СЌРєР°РїС‹?
+    # Перед удалением каталога проекта: сохранить БД и бэкапы?
     if [[ "$REMOVE_PROJECT" == "true" && -d "$PROJECT_DIR" ]]; then
         if [[ -f "$PROJECT_DIR/users.db" ]]; then
-            log_input "РЎРѕС…СЂР°РЅРёС‚СЊ РєРѕРїРёСЋ Р‘Р” (users.db) РїРµСЂРµРґ СѓРґР°Р»РµРЅРёРµРј РІ ~/? (Y/n): "
+            log_input "Сохранить копию БД (users.db) перед удалением в ~/? (Y/n): "
             read -r -n1 REPLY < /dev/tty || true
             echo ""
             if [[ -z "$REPLY" ]] || [[ "$REPLY" =~ [yY] ]]; then
                 local_db_backup="$HOME/users-backup-$(date +%Y%m%d-%H%M%S).db"
                 if cp "$PROJECT_DIR/users.db" "$local_db_backup" 2>/dev/null; then
-                    log_success "Р‘Р” СЃРѕС…СЂР°РЅРµРЅР°: $local_db_backup"
+                    log_success "БД сохранена: $local_db_backup"
                 else
-                    log_warn "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ Р‘Р”"
+                    log_warn "Не удалось скопировать БД"
                     local_db_backup=""
                 fi
             fi
         fi
         if compgen -G "$PROJECT_DIR/backups/db-backup-*.zip" >/dev/null 2>&1; then
-            log_input "РЎРѕС…СЂР°РЅРёС‚СЊ Р°СЂС…РёРІС‹ Р±СЌРєР°РїРѕРІ (СЃРЅРёРјРєРё Remnawave) РІ ~/shopbot-backups/? (y/N): "
+            log_input "Сохранить архивы бэкапов (снимки Remnawave) в ~/shopbot-backups/? (y/N): "
             read -r -n1 REPLY < /dev/tty || true
             echo ""
             if [[ "$REPLY" =~ [yY] ]]; then
                 mkdir -p "$HOME/shopbot-backups"
                 cp "$PROJECT_DIR"/backups/db-backup-*.zip "$HOME/shopbot-backups/" 2>/dev/null || true
                 cp "$PROJECT_DIR"/backups/*.manifest.json "$HOME/shopbot-backups/" 2>/dev/null || true
-                log_success "РђСЂС…РёРІС‹ Р±СЌРєР°РїРѕРІ СЃРѕС…СЂР°РЅРµРЅС‹ РІ ~/shopbot-backups/"
+                log_success "Архивы бэкапов сохранены в ~/shopbot-backups/"
             fi
         fi
     fi
@@ -194,12 +194,12 @@ show_menu() {
 
 show_custom_menu() {
     echo ""
-    echo -e "${YELLOW}${BOLD}Р”РѕРїРѕР»РЅРёС‚РµР»СЊРЅС‹Рµ РѕРїС†РёРё СѓРґР°Р»РµРЅРёСЏ:${NC}"
+    echo -e "${YELLOW}${BOLD}Дополнительные опции удаления:${NC}"
     echo ""
     
-    # РљРѕРЅС„РёРі Nginx
+    # Конфиг Nginx
     if [[ -f "$NGINX_CONF" ]] || [[ -L "$NGINX_LINK" ]]; then
-        log_input "РЈРґР°Р»РёС‚СЊ РєРѕРЅС„РёРіСѓСЂР°С†РёСЋ Nginx? (Y/n): "
+        log_input "Удалить конфигурацию Nginx? (Y/n): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         if [[ -z "$REPLY" ]] || [[ "$REPLY" =~ [yY] ]]; then
@@ -207,10 +207,10 @@ show_custom_menu() {
         fi
     fi
     
-    # РЎРµСЂС‚РёС„РёРєР°С‚С‹ SSL
+    # Сертификаты SSL
     DOMAIN=$(get_domain_from_nginx || echo "")
     if [[ -n "$DOMAIN" ]] && [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
-        log_input "РЈРґР°Р»РёС‚СЊ SSL СЃРµСЂС‚РёС„РёРєР°С‚С‹ РґР»СЏ $DOMAIN? (Y/n): "
+        log_input "Удалить SSL сертификаты для $DOMAIN? (Y/n): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         if [[ -z "$REPLY" ]] || [[ "$REPLY" =~ [yY] ]]; then
@@ -218,9 +218,9 @@ show_custom_menu() {
         fi
     fi
     
-    # Docker РєРѕРЅС‚РµР№РЅРµСЂС‹
+    # Docker контейнеры
     if command -v docker >/dev/null 2>&1 && docker ps -a 2>/dev/null | grep -q "$PROJECT_DIR"; then
-        log_input "РћСЃС‚Р°РЅРѕРІРёС‚СЊ Рё СѓРґР°Р»РёС‚СЊ Docker РєРѕРЅС‚РµР№РЅРµСЂС‹? (Y/n): "
+        log_input "Остановить и удалить Docker контейнеры? (Y/n): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         if [[ -z "$REPLY" ]] || [[ "$REPLY" =~ [yY] ]]; then
@@ -228,9 +228,9 @@ show_custom_menu() {
         fi
     fi
     
-    # РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р°
+    # Каталог проекта
     if [[ -d "$PROJECT_DIR" ]]; then
-        log_input "РЈРґР°Р»РёС‚СЊ РєР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° ($PROJECT_DIR)? (y/N): "
+        log_input "Удалить каталог проекта ($PROJECT_DIR)? (y/N): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         if [[ "$REPLY" =~ [yY] ]]; then
@@ -240,7 +240,7 @@ show_custom_menu() {
     
     # Certbot
     if command -v certbot >/dev/null 2>&1; then
-        log_input "РЈРґР°Р»РёС‚СЊ Certbot? (y/N): "
+        log_input "Удалить Certbot? (y/N): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         if [[ "$REPLY" =~ [yY] ]]; then
@@ -257,40 +257,40 @@ get_domain_from_nginx() {
 
 show_removal_summary() {
     echo ""
-    echo -e "${YELLOW}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓ РС‚РѕРіРѕРІС‹Р№ СЃРїРёСЃРѕРє СѓРґР°Р»РµРЅРёСЏ в”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${YELLOW}${BOLD}━━━━ Итоговый список удаления ━━━━${NC}"
     echo ""
     
-    [[ "$REMOVE_CONFIG" == "true" ]] && echo -e " ${RED}вњ${NC} РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx"
-    [[ "$REMOVE_SSL" == "true" ]] && echo -e " ${RED}вњ${NC} SSL СЃРµСЂС‚РёС„РёРєР°С‚С‹"
-    [[ "$REMOVE_DOCKER" == "true" ]] && echo -e " ${RED}вњ${NC} Docker РєРѕРЅС‚РµР№РЅРµСЂС‹ Рё РѕР±СЂР°Р·С‹"
-    [[ "$REMOVE_PROJECT" == "true" ]] && echo -e " ${RED}вњ${NC} РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° ($PROJECT_DIR)"
-    [[ "$REMOVE_CERTBOT" == "true" ]] && echo -e " ${RED}вњ${NC} Certbot"
+    [[ "$REMOVE_CONFIG" == "true" ]] && echo -e " ${RED}✘${NC} Конфигурация Nginx"
+    [[ "$REMOVE_SSL" == "true" ]] && echo -e " ${RED}✘${NC} SSL сертификаты"
+    [[ "$REMOVE_DOCKER" == "true" ]] && echo -e " ${RED}✘${NC} Docker контейнеры и образы"
+    [[ "$REMOVE_PROJECT" == "true" ]] && echo -e " ${RED}✘${NC} Каталог проекта ($PROJECT_DIR)"
+    [[ "$REMOVE_CERTBOT" == "true" ]] && echo -e " ${RED}✘${NC} Certbot"
     
     echo ""
-    log_input "Р’С‹ СѓРІРµСЂРµРЅС‹? Р­С‚Рѕ РґРµР№СЃС‚РІРёРµ РЅРµРІРѕР·РјРѕР¶РЅРѕ РѕС‚РјРµРЅРёС‚СЊ! (y/N): "
+    log_input "Вы уверены? Это действие невозможно отменить! (y/N): "
     read -r -n1 CONFIRM < /dev/tty || true
     echo ""
     
     if [[ ! "$CONFIRM" =~ [yY] ]]; then
-        log_warn "РЈРґР°Р»РµРЅРёРµ РѕС‚РјРµРЅРµРЅРѕ."
+        log_warn "Удаление отменено."
         exit 0
     fi
 }
 
 remove_nginx_config() {
     if [[ -f "$NGINX_CONF" ]] || [[ -L "$NGINX_LINK" ]]; then
-        log_info "РЈРґР°Р»РµРЅРёРµ РєРѕРЅС„РёРіСѓСЂР°С†РёРё Nginx..."
-        run_with_spinner "РЈРґР°Р»РµРЅРёРµ СЃРёРјРІРѕР»РёС‡РµСЃРєРѕР№ СЃСЃС‹Р»РєРё" sudo rm -f "$NGINX_LINK" || true
-        run_with_spinner "РЈРґР°Р»РµРЅРёРµ РєРѕРЅС„РёРіСѓСЂР°С†РёРё" sudo rm -f "$NGINX_CONF" || true
+        log_info "Удаление конфигурации Nginx..."
+        run_with_spinner "Удаление символической ссылки" sudo rm -f "$NGINX_LINK" || true
+        run_with_spinner "Удаление конфигурации" sudo rm -f "$NGINX_CONF" || true
         
         if command -v nginx >/dev/null 2>&1; then
-            run_with_spinner "РџСЂРѕРІРµСЂРєР° РєРѕРЅС„РёРіСѓСЂР°С†РёРё Nginx" sudo nginx -t || log_warn "РџСЂРѕРІРµСЂРєР° РєРѕРЅС„РёРіСѓСЂР°С†РёРё Р·Р°РІРµСЂС€РёР»Р°СЃСЊ СЃ РѕС€РёР±РєРѕР№"
-            run_with_spinner "РџРµСЂРµР·Р°РіСЂСѓР·РєР° Nginx" sudo systemctl reload nginx || log_warn "РќРµ СѓРґР°Р»РѕСЃСЊ РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ Nginx"
+            run_with_spinner "Проверка конфигурации Nginx" sudo nginx -t || log_warn "Проверка конфигурации завершилась с ошибкой"
+            run_with_spinner "Перезагрузка Nginx" sudo systemctl reload nginx || log_warn "Не удалось перезагрузить Nginx"
         fi
         
-        log_success "РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx СѓРґР°Р»РµРЅР°"
+        log_success "Конфигурация Nginx удалена"
     else
-        log_warn "РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx РЅРµ РЅР°Р№РґРµРЅР°"
+        log_warn "Конфигурация Nginx не найдена"
     fi
 }
 
@@ -300,18 +300,18 @@ remove_ssl_certs() {
         domain=$(get_domain_from_nginx || echo "")
         
         if [[ -z "$domain" ]]; then
-            log_warn "РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ РґРѕРјРµРЅ РёР· РєРѕРЅС„РёРіСѓСЂР°С†РёРё"
+            log_warn "Не удалось определить домен из конфигурации"
             return 1
         fi
         
         if [[ -d "/etc/letsencrypt/live/${domain}" ]]; then
-            log_info "РЈРґР°Р»РµРЅРёРµ SSL СЃРµСЂС‚РёС„РёРєР°С‚РѕРІ РґР»СЏ $domain..."
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ РґРёСЂРµРєС‚РѕСЂРёРё СЃРµСЂС‚РёС„РёРєР°С‚РѕРІ" sudo rm -rf "/etc/letsencrypt/live/${domain}" || true
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ Р°СЂС…РёРІР° СЃРµСЂС‚РёС„РёРєР°С‚РѕРІ" sudo rm -rf "/etc/letsencrypt/archive/${domain}" || true
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ renewal РєРѕРЅС„РёРіСѓСЂР°С†РёРё" sudo rm -f "/etc/letsencrypt/renewal/${domain}.conf" || true
-            log_success "SSL СЃРµСЂС‚РёС„РёРєР°С‚С‹ СѓРґР°Р»РµРЅС‹"
+            log_info "Удаление SSL сертификатов для $domain..."
+            run_with_spinner "Удаление директории сертификатов" sudo rm -rf "/etc/letsencrypt/live/${domain}" || true
+            run_with_spinner "Удаление архива сертификатов" sudo rm -rf "/etc/letsencrypt/archive/${domain}" || true
+            run_with_spinner "Удаление renewal конфигурации" sudo rm -f "/etc/letsencrypt/renewal/${domain}.conf" || true
+            log_success "SSL сертификаты удалены"
         else
-            log_warn "SSL СЃРµСЂС‚РёС„РёРєР°С‚С‹ РґР»СЏ $domain РЅРµ РЅР°Р№РґРµРЅС‹"
+            log_warn "SSL сертификаты для $domain не найдены"
         fi
     fi
 }
@@ -319,47 +319,47 @@ remove_ssl_certs() {
 remove_docker_containers() {
     if [[ "$REMOVE_DOCKER" == "true" ]]; then
         if ! command -v docker >/dev/null 2>&1; then
-            log_warn "Docker РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ"
+            log_warn "Docker не установлен"
             return 0
         fi
         
-        log_info "РЈРґР°Р»РµРЅРёРµ Docker РєРѕРЅС‚РµР№РЅРµСЂРѕРІ..."
+        log_info "Удаление Docker контейнеров..."
         
-        # РџРµСЂРµС…РѕРґРёРј РІ РєР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° РµСЃР»Рё РѕРЅ СЃСѓС‰РµСЃС‚РІСѓРµС‚
+        # Переходим в каталог проекта если он существует
         if [[ -d "$PROJECT_DIR" ]]; then
             cd "$PROJECT_DIR"
             
             if [[ -f "docker-compose.yml" ]]; then
-                run_with_spinner "РћСЃС‚Р°РЅРѕРІРєР° Рё СѓРґР°Р»РµРЅРёРµ РєРѕРЅС‚РµР№РЅРµСЂРѕРІ (docker-compose)" \
+                run_with_spinner "Остановка и удаление контейнеров (docker-compose)" \
                     sudo bash -c "docker-compose down --rmi all --remove-orphans 2>/dev/null" || true
             fi
             
             cd - > /dev/null
         fi
         
-        # РЈРґР°Р»СЏРµРј РІСЃРµ РєРѕРЅС‚РµР№РЅРµСЂС‹ РѕС‚РЅРѕСЃСЏС‰РёРµСЃСЏ Рє РїСЂРѕРµРєС‚Сѓ
+        # Удаляем все контейнеры относящиеся к проекту
         local containers
         containers=$(docker ps -a --format "{{.Names}}" 2>/dev/null | grep "$PROJECT_DIR" || echo "")
         
         if [[ -n "$containers" ]]; then
-            log_warn "РЈРґР°Р»РµРЅРёРµ РѕСЃС‚Р°РІС€РёС…СЃСЏ РєРѕРЅС‚РµР№РЅРµСЂРѕРІ..."
+            log_warn "Удаление оставшихся контейнеров..."
             echo "$containers" | while read -r container; do
-                run_with_spinner "РЈРґР°Р»РµРЅРёРµ РєРѕРЅС‚РµР№РЅРµСЂР° $container" sudo docker rm -f "$container" || true
+                run_with_spinner "Удаление контейнера $container" sudo docker rm -f "$container" || true
             done
         fi
         
-        log_success "Docker РєРѕРЅС‚РµР№РЅРµСЂС‹ СѓРґР°Р»РµРЅС‹"
+        log_success "Docker контейнеры удалены"
     fi
 }
 
 remove_project_directory() {
     if [[ "$REMOVE_PROJECT" == "true" ]]; then
         if [[ -d "$PROJECT_DIR" ]]; then
-            log_info "РЈРґР°Р»РµРЅРёРµ РєР°С‚Р°Р»РѕРіР° РїСЂРѕРµРєС‚Р°..."
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ $PROJECT_DIR" sudo rm -rf "$PROJECT_DIR" || true
-            log_success "РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° СѓРґР°Р»С‘РЅ"
+            log_info "Удаление каталога проекта..."
+            run_with_spinner "Удаление $PROJECT_DIR" sudo rm -rf "$PROJECT_DIR" || true
+            log_success "Каталог проекта удалён"
         else
-            log_warn "РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° РЅРµ РЅР°Р№РґРµРЅ"
+            log_warn "Каталог проекта не найден"
         fi
     fi
 }
@@ -367,71 +367,71 @@ remove_project_directory() {
 remove_certbot() {
     if [[ "$REMOVE_CERTBOT" == "true" ]]; then
         if ! command -v certbot >/dev/null 2>&1; then
-            log_warn "Certbot РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ"
+            log_warn "Certbot не установлен"
             return 0
         fi
         
-        log_info "РЈРґР°Р»РµРЅРёРµ Certbot..."
+        log_info "Удаление Certbot..."
         
-        # РџСЂРѕРІРµСЂСЏРµРј РєР°Рє Р±С‹Р» СѓСЃС‚Р°РЅРѕРІР»РµРЅ Certbot
+        # Проверяем как был установлен Certbot
         if snap list 2>/dev/null | grep -q certbot; then
-            log_warn "Certbot СѓСЃС‚Р°РЅРѕРІР»РµРЅ С‡РµСЂРµР· snap, СѓРґР°Р»РµРЅРёРµ..."
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ Certbot (snap)" sudo snap remove certbot || true
+            log_warn "Certbot установлен через snap, удаление..."
+            run_with_spinner "Удаление Certbot (snap)" sudo snap remove certbot || true
         fi
         
         if dpkg -l 2>/dev/null | grep -q certbot; then
-            log_warn "Certbot СѓСЃС‚Р°РЅРѕРІР»РµРЅ С‡РµСЂРµР· apt, СѓРґР°Р»РµРЅРёРµ..."
-            run_with_spinner "РЈРґР°Р»РµРЅРёРµ python3-certbot-nginx" \
+            log_warn "Certbot установлен через apt, удаление..."
+            run_with_spinner "Удаление python3-certbot-nginx" \
                 sudo bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get remove -y python3-certbot-nginx certbot 2>/dev/null" || true
         fi
         
-        # РЈРґР°Р»СЏРµРј РґРёСЂРµРєС‚РѕСЂРёСЋ Let's Encrypt (РµСЃР»Рё РІС‹Р±СЂР°РЅ С„Р»Р°Рі)
+        # Удаляем директорию Let's Encrypt (если выбран флаг)
         if [[ -d "/etc/letsencrypt" ]]; then
-            log_input "РЈРґР°Р»РёС‚СЊ РІСЃРµ СЃРµСЂС‚РёС„РёРєР°С‚С‹ Let's Encrypt (/etc/letsencrypt)? (y/N): "
+            log_input "Удалить все сертификаты Let's Encrypt (/etc/letsencrypt)? (y/N): "
             read -r -n1 REPLY < /dev/tty || true
             echo ""
             if [[ "$REPLY" =~ [yY] ]]; then
-                run_with_spinner "РЈРґР°Р»РµРЅРёРµ /etc/letsencrypt" sudo rm -rf /etc/letsencrypt || true
-                log_warn "Р’СЃРµ СЃРµСЂС‚РёС„РёРєР°С‚С‹ Let's Encrypt СѓРґР°Р»РµРЅС‹"
+                run_with_spinner "Удаление /etc/letsencrypt" sudo rm -rf /etc/letsencrypt || true
+                log_warn "Все сертификаты Let's Encrypt удалены"
             fi
         fi
         
-        log_success "Certbot СѓРґР°Р»С‘РЅ"
+        log_success "Certbot удалён"
     fi
 }
 
-# --- РќР°С‡Р°Р»Рѕ РІС‹РїРѕР»РЅРµРЅРёСЏ ---
+# --- Начало выполнения ---
 
 show_header
 ensure_sudo_refresh
 
-# РџСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ СЌС‚Рѕ РЅРµ РіР»Р°РІРЅС‹Р№ РєР°С‚Р°Р»РѕРі
+# Проверяем что это не главный каталог
 if [[ "$PWD" == "/" ]] || [[ "$PWD" == "/root" ]] || [[ "$PWD" == "$HOME" ]]; then
-    log_warn "РќРµ СЂРµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ Р·Р°РїСѓСЃРєР°С‚СЊ СЃРєСЂРёРїС‚ РёР· РєРѕСЂРЅРµРІРѕРіРѕ РёР»Рё РґРѕРјР°С€РЅРµРіРѕ РєР°С‚Р°Р»РѕРіР°"
+    log_warn "Не рекомендуется запускать скрипт из корневого или домашнего каталога"
 fi
 
-# РџСЂРѕРІРµСЂСЏРµРј РµСЃС‚СЊ Р»Рё С‡С‚Рѕ СѓРґР°Р»СЏС‚СЊ
+# Проверяем есть ли что удалять
 if ! [[ -f "$NGINX_CONF" ]] && ! [[ -L "$NGINX_LINK" ]] && ! [[ -d "$PROJECT_DIR" ]]; then
-    log_error "Remnawave Shopbot РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ. РќРµС‡РµРіРѕ СѓРґР°Р»СЏС‚СЊ."
+    log_error "Remnawave Shopbot не установлен. Нечего удалять."
     exit 1
 fi
 
-log_info "РћР±РЅР°СЂСѓР¶РµРЅР° СЃСѓС‰РµСЃС‚РІСѓСЋС‰Р°СЏ СѓСЃС‚Р°РЅРѕРІРєР° Remnawave Shopbot"
+log_info "Обнаружена существующая установка Remnawave Shopbot"
 echo ""
 
-# РџРѕРєР°Р·С‹РІР°РµРј РјРµРЅСЋ
+# Показываем меню
 show_menu
 
-# РџРѕРєР°Р·С‹РІР°РµРј РёС‚РѕРіРѕРІС‹Р№ СЃРїРёСЃРѕРє
+# Показываем итоговый список
 show_removal_summary
 
 echo ""
-echo -e "${RED}${BOLD}в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ${NC}"
-echo -e "${RED}${BOLD}               РќРђР§РРќРђР•РўРЎРЇ РЈР”РђР›Р•РќРР•...                           ${NC}"
-echo -e "${RED}${BOLD}в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ${NC}"
+echo -e "${RED}${BOLD}════════════════════════════════════════════════════════════════${NC}"
+echo -e "${RED}${BOLD}               НАЧИНАЕТСЯ УДАЛЕНИЕ...                           ${NC}"
+echo -e "${RED}${BOLD}════════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-# Р’С‹РїРѕР»РЅСЏРµРј СѓРґР°Р»РµРЅРёРµ
+# Выполняем удаление
 [[ "$REMOVE_CONFIG" == "true" ]] && remove_nginx_config
 [[ "$REMOVE_SSL" == "true" ]] && remove_ssl_certs
 [[ "$REMOVE_DOCKER" == "true" ]] && remove_docker_containers
@@ -439,41 +439,41 @@ echo ""
 [[ "$REMOVE_CERTBOT" == "true" ]] && remove_certbot
 
 echo ""
-echo -e "${GREEN}в”Џв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”“${NC}"
-echo -e "${GREEN}в”ѓ                  РЈР”РђР›Р•РќРР• Р—РђР’Р•Р РЁР•РќРћ!                          в”ѓ${NC}"
-echo -e "${GREEN}в”—в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”›${NC}"
+echo -e "${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+echo -e "${GREEN}┃                  УДАЛЕНИЕ ЗАВЕРШЕНО!                          ┃${NC}"
+echo -e "${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 echo ""
 
-# РџРѕРєР°Р·С‹РІР°РµРј РѕСЃС‚Р°РІС€РёРµСЃСЏ С„Р°Р№Р»С‹/СЃРµСЂРІРёСЃС‹
+# Показываем оставшиеся файлы/сервисы
 if [[ -f "$NGINX_CONF" ]] || [[ -L "$NGINX_LINK" ]]; then
-    log_warn "РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx РІСЃС‘ РµС‰С‘ СЃСѓС‰РµСЃС‚РІСѓРµС‚:"
+    log_warn "Конфигурация Nginx всё ещё существует:"
     [[ -f "$NGINX_CONF" ]] && echo -e "  ${CYAN}$NGINX_CONF${NC}"
     [[ -L "$NGINX_LINK" ]] && echo -e "  ${CYAN}$NGINX_LINK${NC}"
 fi
 
 if [[ -d "$PROJECT_DIR" ]]; then
-    log_warn "РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° РІСЃС‘ РµС‰С‘ СЃСѓС‰РµСЃС‚РІСѓРµС‚: ${CYAN}$PROJECT_DIR${NC}"
+    log_warn "Каталог проекта всё ещё существует: ${CYAN}$PROJECT_DIR${NC}"
 fi
 
 if command -v docker >/dev/null 2>&1 && docker ps -a 2>/dev/null | grep -q "$PROJECT_DIR"; then
-    log_warn "Docker РєРѕРЅС‚РµР№РЅРµСЂС‹ РїСЂРѕРµРєС‚Р° РІСЃС‘ РµС‰С‘ СЃСѓС‰РµСЃС‚РІСѓСЋС‚"
+    log_warn "Docker контейнеры проекта всё ещё существуют"
 fi
 
-# РќР°РїРѕРјРёРЅР°РµРј РїСЂРѕ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Рµ РґР°РЅРЅС‹Рµ РЅРѕРІРѕРіРѕ РґРѕРјРµРЅР°
+# Напоминаем про сохранённые данные нового домена
 if [[ -n "$local_db_backup" && -f "$local_db_backup" ]]; then
-    log_info "РљРѕРїРёСЏ Р‘Р” СЃРѕС…СЂР°РЅРµРЅР°: ${CYAN}${local_db_backup}${NC}"
-    log_info "Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ: РїРѕР»РѕР¶РёС‚Рµ С„Р°Р№Р» РєР°Рє users.db РІ РєР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° Рё Р·Р°РїСѓСЃС‚РёС‚Рµ"
-    log_info "РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ С‡РµСЂРµР· Р°РґРјРёРЅРєСѓ (restore РїСЂРѕРІРµСЂРёС‚ schema version Рё snapshots)."
+    log_info "Копия БД сохранена: ${CYAN}${local_db_backup}${NC}"
+    log_info "Восстановление: положите файл как users.db в каталог проекта и запустите"
+    log_info "восстановление через админку (restore проверит schema version и snapshots)."
 fi
 if [[ -d "$HOME/shopbot-backups" ]]; then
-    log_info "РђСЂС…РёРІС‹ Р±СЌРєР°РїРѕРІ СЃРѕС…СЂР°РЅРµРЅС‹: ${CYAN}$HOME/shopbot-backups${NC}"
+    log_info "Архивы бэкапов сохранены: ${CYAN}$HOME/shopbot-backups${NC}"
 fi
 
 echo ""
-log_info "Р”Р»СЏ РїРѕР»РЅРѕРіРѕ СѓРґР°Р»РµРЅРёСЏ РѕСЃС‚Р°С‚РєРѕРІ РІС‹РїРѕР»РЅРёС‚Рµ РІСЂСѓС‡РЅСѓСЋ:"
+log_info "Для полного удаления остатков выполните вручную:"
 echo -e "  ${CYAN}sudo rm -rf $PROJECT_DIR${NC}"
 echo -e "  ${CYAN}sudo rm -f $NGINX_LINK $NGINX_CONF${NC}"
-echo -e "  ${CYAN}docker volume rm shopbot-backups${NC}  (РµСЃР»Рё Р±СЌРєР°РїС‹ Р±РѕР»СЊС€Рµ РЅРµ РЅСѓР¶РЅС‹)"
+echo -e "  ${CYAN}docker volume rm shopbot-backups${NC}  (если бэкапы больше не нужны)"
 echo ""
 
 show_footer

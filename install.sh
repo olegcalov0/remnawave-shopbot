@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -Eeuo pipefail
 
 RED='\033[0;31m'
@@ -13,10 +13,10 @@ NC='\033[0m'
 REPO_URL="https://github.com/CyberERROR/remnawave-shopbot.git"
 PROJECT_NAME="remnawave-shopbot"
 
-# === РРЎРџР РђР’Р›Р•РќРР• РџРЈРўР === 
+# === ИСПРАВЛЕНИЕ ПУТИ === 
 PROJECT_DIR="$HOME/$PROJECT_NAME"
     
-# РќР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№ РїСЂРѕРІРµСЂСЏРµРј С‚РµРєСѓС‰СѓСЋ РїР°РїРєСѓ, РµСЃР»Рё РІРґСЂСѓРі СѓСЃС‚Р°РЅРѕРІРёР»Рё РІ РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅРѕРµ РјРµСЃС‚Рѕ
+# На всякий случай проверяем текущую папку, если вдруг установили в нестандартное место
 if [[ ! -d "$PROJECT_DIR" ]] && [[ -d "./$PROJECT_NAME" ]]; then
     PROJECT_DIR="$(pwd)/$PROJECT_NAME"
 fi
@@ -31,18 +31,18 @@ YOOKASSA_PORT=""
 
 show_header() {
     clear
-    echo -e "${PURPLE}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${PURPLE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${PURPLE}${BOLD}           REMNAWAVE SHOPBOT INSTALLER & UPDATER              ${NC}"
-    echo -e "${PURPLE}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${PURPLE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
 show_footer() {
-    echo -e "${CYAN}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
-    echo -e "${CYAN}Р РµРїРѕР·РёС‚РѕСЂРёР№:${NC}  https://github.com/CyberERROR/remnawave-shopbot"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}Репозиторий:${NC}  https://github.com/CyberERROR/remnawave-shopbot"
     echo -e "${CYAN}Telegram:${NC}      https://t.me/+7hUhNxAdzBpjNWRi"
-    echo -e "${CYAN}Р Р°Р·СЂР°Р±РѕС‚С‡РёРє:${NC}   https://github.com/CyberERROR"
-    echo -e "${CYAN}${BOLD}в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓ${NC}"
+    echo -e "${CYAN}Разработчик:${NC}   https://github.com/CyberERROR"
+    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
@@ -51,7 +51,7 @@ log_info() {
 }
 
 log_success() {
-    echo -e "${GREEN}${BOLD}[вњ”]${NC} $1"
+    echo -e "${GREEN}${BOLD}[✔]${NC} $1"
 }
 
 log_warn() {
@@ -59,7 +59,7 @@ log_warn() {
 }
 
 log_error() {
-    echo -e "${RED}${BOLD}[вњ] РћС€РёР±РєР°:${NC} $1" >&2
+    echo -e "${RED}${BOLD}[✘] Ошибка:${NC} $1" >&2
 }
 
 log_input() {
@@ -71,7 +71,7 @@ run_with_spinner() {
     shift
     local cmd=("$@")
 
-    echo -ne "${BLUE}${BOLD}[вћњ]${NC} ${message}... "
+    echo -ne "${BLUE}${BOLD}[➜]${NC} ${message}... "
 
     local temp_log
     temp_log=$(mktemp)
@@ -96,7 +96,7 @@ run_with_animated_spinner() {
     shift
     local cmd=("$@")
 
-    echo -ne "${BLUE}${BOLD}[вћњ]${NC} ${message}... "
+    echo -ne "${BLUE}${BOLD}[➜]${NC} ${message}... "
 
     local temp_log
     temp_log=$(mktemp)
@@ -140,7 +140,7 @@ run_with_animated_spinner() {
 on_error() {
     tput cnorm 2>/dev/null || true
     echo ""
-    log_error "РЎРєСЂРёРїС‚ РїСЂРµСЂРІР°РЅ РЅР° СЃС‚СЂРѕРєРµ $1."
+    log_error "Скрипт прерван на строке $1."
     exit 1
 }
 trap 'on_error $LINENO' ERR
@@ -198,7 +198,7 @@ get_port_from_nginx() {
 
 ensure_sudo_refresh() {
     if ! sudo -v; then
-        log_error "РўСЂРµР±СѓСЋС‚СЃСЏ РїСЂР°РІР° sudo. Р’РІРµРґРёС‚Рµ РїР°СЂРѕР»СЊ РІС‹С€Рµ."
+        log_error "Требуются права sudo. Введите пароль выше."
         exit 1
     fi
 }
@@ -224,55 +224,55 @@ ensure_packages() {
     done
 
     if ((${#missing[@]})); then
-        echo -e "${BLUE}${BOLD}[вћњ]${NC} РўСЂРµР±СѓСЋС‚СЃСЏ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё: ${CYAN}${missing_desc[*]}${NC}"
-        run_with_animated_spinner "РЈСЃС‚Р°РЅРѕРІРєР° Р·Р°РІРёСЃРёРјРѕСЃС‚РµР№ (${missing[*]})" \
+        echo -e "${BLUE}${BOLD}[➜]${NC} Требуются зависимости: ${CYAN}${missing_desc[*]}${NC}"
+        run_with_animated_spinner "Установка зависимостей (${missing[*]})" \
             sudo bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends ${missing[*]}" || {
-            log_error "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё"
+            log_error "Не удалось установить зависимости"
             exit 1
         }
     else
-        log_success "РЎРёСЃС‚РµРјРЅС‹Рµ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РІ РїРѕСЂСЏРґРєРµ"
+        log_success "Системные зависимости в порядке"
     fi
 }
 
 ensure_services() {
-    run_with_spinner "РџСЂРѕРІРµСЂРєР° Docker" sudo systemctl enable docker || true
-    run_with_spinner "Р—Р°РїСѓСЃРє Docker" sudo systemctl start docker || true
-    run_with_spinner "РџСЂРѕРІРµСЂРєР° Nginx" sudo systemctl enable nginx || true
-    run_with_spinner "Р—Р°РїСѓСЃРє Nginx" sudo systemctl start nginx || true
+    run_with_spinner "Проверка Docker" sudo systemctl enable docker || true
+    run_with_spinner "Запуск Docker" sudo systemctl start docker || true
+    run_with_spinner "Проверка Nginx" sudo systemctl enable nginx || true
+    run_with_spinner "Запуск Nginx" sudo systemctl start nginx || true
 }
 
 ensure_certbot_nginx() {
     if command -v certbot >/dev/null 2>&1 && certbot plugins 2>/dev/null | grep -qi 'nginx'; then
-        log_success "РџР»Р°РіРёРЅ Certbot Nginx Р°РєС‚РёРІРµРЅ"
+        log_success "Плагин Certbot Nginx активен"
         return 0
     fi
 
-    log_info "РЈСЃС‚Р°РЅРѕРІРєР° РїР»Р°РіРёРЅР° Certbot РґР»СЏ Nginx..."
+    log_info "Установка плагина Certbot для Nginx..."
     
-    run_with_animated_spinner "РЈСЃС‚Р°РЅРѕРІРєР° python3-certbot-nginx" \
+    run_with_animated_spinner "Установка python3-certbot-nginx" \
         sudo bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-certbot-nginx" || {
-        log_warn "РџРѕРїС‹С‚РєР° СѓСЃС‚Р°РЅРѕРІРєРё С‡РµСЂРµР· snap..."
+        log_warn "Попытка установки через snap..."
         
         if ! command -v snap >/dev/null 2>&1; then
-            run_with_animated_spinner "РЈСЃС‚Р°РЅРѕРІРєР° snapd" \
+            run_with_animated_spinner "Установка snapd" \
                 sudo bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends snapd" || {
-                log_error "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ snapd"
+                log_error "Не удалось установить snapd"
                 exit 1
             }
         fi
         
-        run_with_animated_spinner "РЈСЃС‚Р°РЅРѕРІРєР° Certbot С‡РµСЂРµР· snap" \
+        run_with_animated_spinner "Установка Certbot через snap" \
             sudo bash -c "snap install core 2>/dev/null; snap refresh core 2>/dev/null; snap install --classic certbot 2>/dev/null; ln -sf /snap/bin/certbot /usr/bin/certbot" || {
-            log_error "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ Certbot"
+            log_error "Не удалось установить Certbot"
             exit 1
         }
     }
     
     if certbot plugins 2>/dev/null | grep -qi 'nginx'; then
-        log_success "РџР»Р°РіРёРЅ Certbot Nginx СѓСЃРїРµС€РЅРѕ РЅР°СЃС‚СЂРѕРµРЅ"
+        log_success "Плагин Certbot Nginx успешно настроен"
     else
-        log_error "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РїР»Р°РіРёРЅ Nginx РґР»СЏ Certbot"
+        log_error "Не удалось установить плагин Nginx для Certbot"
         exit 1
     fi
 }
@@ -281,7 +281,7 @@ configure_nginx() {
     local domain="$1"
     local port="$2"
     
-    log_info "РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx РґР»СЏ $domain:$port"
+    log_info "Конфигурация Nginx для $domain:$port"
     
     sudo tee "$NGINX_CONF" >/dev/null <<EOF
 server {
@@ -309,20 +309,20 @@ EOF
         sudo ln -s "$NGINX_CONF" "$NGINX_LINK" 2>/dev/null || true
     fi
 
-    run_with_spinner "РџСЂРѕРІРµСЂРєР° РєРѕРЅС„РёРіСѓСЂР°С†РёРё Nginx" sudo nginx -t || {
-        log_error "РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ РєРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx"
+    run_with_spinner "Проверка конфигурации Nginx" sudo nginx -t || {
+        log_error "Некорректная конфигурация Nginx"
         exit 1
     }
     
-    run_with_spinner "РџРµСЂРµР·Р°РіСЂСѓР·РєР° Nginx" sudo systemctl reload nginx || {
-        log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ Nginx"
+    run_with_spinner "Перезагрузка Nginx" sudo systemctl reload nginx || {
+        log_error "Не удалось перезагрузить Nginx"
         exit 1
     }
 }
 
 show_docker_images() {
     if command -v docker >/dev/null 2>&1 && [[ -f "docker-compose.yml" ]]; then
-        echo -e "${BLUE}${BOLD}[INFO]${NC} Docker РєРѕРЅС‚РµР№РЅРµСЂС‹ РІ РїСЂРѕРµРєС‚Рµ:"
+        echo -e "${BLUE}${BOLD}[INFO]${NC} Docker контейнеры в проекте:"
         docker-compose config --services 2>/dev/null | sed 's/^/  - /' || true
     fi
 }
@@ -332,23 +332,23 @@ ensure_sudo_refresh
 
 if [[ -f "$NGINX_CONF" ]]; then
     
-    # 1. РџСЂРѕРІРµСЂСЏРµРј, СЃСѓС‰РµСЃС‚РІСѓРµС‚ Р»Рё РїР°РїРєР° РїРѕ РѕР¶РёРґР°РµРјРѕРјСѓ РїСѓС‚Рё
+    # 1. Проверяем, существует ли папка по ожидаемому пути
     if [[ ! -d "$PROJECT_DIR" ]]; then
-        log_warn "РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ Nginx РЅР°Р№РґРµРЅР°, РЅРѕ РїР°РїРєР° СЃ Р±РѕС‚РѕРј РѕС‚СЃСѓС‚СЃС‚РІСѓРµС‚ РїРѕ РїСѓС‚Рё: $PROJECT_DIR"
+        log_warn "Конфигурация Nginx найдена, но папка с ботом отсутствует по пути: $PROJECT_DIR"
         
-        # 2. РџРѕРїС‹С‚РєР° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРіРѕ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ (РєР»РѕРЅ)
-        log_info "Р—Р°РїСѓСЃРє Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРіРѕ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ С„Р°Р№Р»РѕРІ..."
+        # 2. Попытка автоматического восстановления (клон)
+        log_info "Запуск автоматического восстановления файлов..."
         ensure_packages
         
-        run_with_animated_spinner "Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёРµ СЂРµРїРѕР·РёС‚РѕСЂРёСЏ" git clone "$REPO_URL" "$PROJECT_DIR" || {
-            log_error "РљСЂРёС‚РёС‡РµСЃРєР°СЏ РѕС€РёР±РєР°: РЅРµ СѓРґР°Р»РѕСЃСЊ РєР»РѕРЅРёСЂРѕРІР°С‚СЊ СЂРµРїРѕР·РёС‚РѕСЂРёР№ РІ $PROJECT_DIR."
+        run_with_animated_spinner "Восстановление репозитория" git clone "$REPO_URL" "$PROJECT_DIR" || {
+            log_error "Критическая ошибка: не удалось клонировать репозиторий в $PROJECT_DIR."
             exit 1
         }
     fi
     
-    # 3. РўРµРїРµСЂСЊ РїР°РїРєР° РґРѕР»Р¶РЅР° СЃСѓС‰РµСЃС‚РІРѕРІР°С‚СЊ
+    # 3. Теперь папка должна существовать
     if [[ -d "$PROJECT_DIR" ]]; then
-        log_info "Р РµР¶РёРј РѕР±РЅРѕРІР»РµРЅРёСЏ Р°РєС‚РёРІРµРЅ. РџСѓС‚СЊ: $PROJECT_DIR"
+        log_info "Режим обновления активен. Путь: $PROJECT_DIR"
         
         cd "$PROJECT_DIR"
         
@@ -356,13 +356,13 @@ if [[ -f "$NGINX_CONF" ]]; then
         YOOKASSA_PORT=$(get_port_from_nginx)
         
         if [[ -z "$DOMAIN" ]]; then
-            log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ РґРѕРјРµРЅ РёР· РєРѕРЅС„РёРіСѓСЂР°С†РёРё Nginx. Р’РѕР·РјРѕР¶РЅРѕ, С„Р°Р№Р» РїРѕРІСЂРµР¶РґРµРЅ."
+            log_error "Не удалось прочитать домен из конфигурации Nginx. Возможно, файл поврежден."
             exit 1
         fi
         
-        run_with_animated_spinner "РћР±РЅРѕРІР»РµРЅРёРµ С„Р°Р№Р»РѕРІ (Hard Reset)" \
+        run_with_animated_spinner "Обновление файлов (Hard Reset)" \
             bash -c "git fetch origin main && git reset --hard origin/main" || {
-            log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ СЂРµРїРѕР·РёС‚РѕСЂРёР№"
+            log_error "Не удалось обновить репозиторий"
             exit 1
         }
         
@@ -370,64 +370,64 @@ if [[ -f "$NGINX_CONF" ]]; then
         show_docker_images
         echo ""
         
-        # Р‘СЌРєР°Рї Р‘Р” РїРµСЂРµРґ РѕР±РЅРѕРІР»РµРЅРёРµРј: РјРёРіСЂР°С†РёСЏ СЃС…РµРјС‹ (schema_version=2, РіРёР±СЂРёРґ/РґРѕРєСѓРїРєР°/fulfillment)
+        # Бэкап БД перед обновлением: миграция схемы (schema_version=2, гибрид/докупка/fulfillment)
         if [[ -f "$PROJECT_DIR/users.db" ]]; then
             local_backup="users-before-update-$(date +%Y%m%d-%H%M%S).db"
-            run_with_spinner "Р РµР·РµСЂРІРЅР°СЏ РєРѕРїРёСЏ Р‘Р” РїРµСЂРµРґ РѕР±РЅРѕРІР»РµРЅРёРµРј (${local_backup})" \
+            run_with_spinner "Резервная копия БД перед обновлением (${local_backup})" \
                 cp "$PROJECT_DIR/users.db" "$PROJECT_DIR/${local_backup}" || {
-                log_error "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЂРµР·РµСЂРІРЅСѓСЋ РєРѕРїРёСЋ Р‘Р”. РћР±РЅРѕРІР»РµРЅРёРµ РїСЂРµСЂРІР°РЅРѕ (Р·Р°С‰РёС‚Р° РґР°РЅРЅС‹С…)."
+                log_error "Не удалось создать резервную копию БД. Обновление прервано (защита данных)."
                 exit 1
             }
-            # С…СЂР°РЅРёРј РЅРµ Р±РѕР»РµРµ 3 pre-update РєРѕРїРёР№
+            # храним не более 3 pre-update копий
             ls -1t "$PROJECT_DIR"/users-before-update-*.db 2>/dev/null | tail -n +4 | while read -r old; do
                 rm -f "$old"
             done || true
         else
-            log_warn "users.db РЅРµ РЅР°Р№РґРµРЅ вЂ” РїСЂРѕРїСѓСЃРєР°СЋ Р±СЌРєР°Рї (РїРµСЂРІС‹Р№ Р·Р°РїСѓСЃРє?)"
+            log_warn "users.db не найден — пропускаю бэкап (первый запуск?)"
         fi
         
         ensure_services
         
-        run_with_animated_spinner "РџРµСЂРµСЃР±РѕСЂРєР° РєРѕРЅС‚РµР№РЅРµСЂРѕРІ" \
+        run_with_animated_spinner "Пересборка контейнеров" \
             sudo bash -c "docker-compose down --remove-orphans && docker-compose up -d --build" || {
-            log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РїРµСЂРµСЃРѕР±СЂР°С‚СЊ РєРѕРЅС‚РµР№РЅРµСЂС‹"
+            log_error "Не удалось пересобрать контейнеры"
             exit 1
         }
         
-        # РњРёРіСЂР°С†РёСЏ Р‘Р” РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїСЂРё СЃС‚Р°СЂС‚Рµ (initialize_db/run_migration).
-        # Р“Р°СЂР°РЅС‚РёСЂСѓРµРј РїСЂРѕРіРѕРЅ СЏРІРЅС‹Рј РІС‹Р·РѕРІРѕРј, С‡С‚РѕР±С‹ РѕС€РёР±РєРё СЃС…РµРјС‹ Р±С‹Р»Рё РІРёРґРЅС‹ РІ Р»РѕРіРµ СѓСЃС‚Р°РЅРѕРІРєРё.
-        run_with_spinner "РњРёРіСЂР°С†РёСЏ Р‘Р” (run_migration)" \
+        # Миграция БД выполняется автоматически при старте (initialize_db/run_migration).
+        # Гарантируем прогон явным вызовом, чтобы ошибки схемы были видны в логе установки.
+        run_with_spinner "Миграция БД (run_migration)" \
             sudo bash -c "docker-compose run --rm --no-deps --entrypoint '' remnawave-shopbot /app/.venv/bin/python -c 'from shop_bot.data_manager.database import initialize_db; initialize_db()'" || {
-            log_warn "РњРёРіСЂР°С†РёСЏ Р·Р°РІРµСЂС€РёР»Р°СЃСЊ СЃ РѕС€РёР±РєРѕР№ вЂ” РїСЂРѕРІРµСЂСЊС‚Рµ Р»РѕРіРё РєРѕРЅС‚РµР№РЅРµСЂР°. РћР±РЅРѕРІР»С‘РЅРЅР°СЏ Р‘Р” РІРѕСЃСЃС‚Р°РЅРѕРІРёРјР° РёР· ${local_backup:-Р±СЌРєР°РїР°}."
+            log_warn "Миграция завершилась с ошибкой — проверьте логи контейнера. Обновлённая БД восстановима из ${local_backup:-бэкапа}."
         }
         
-        # Р®РЅРёС‚-С‚РµСЃС‚С‹ РЅРѕРІРѕРіРѕ РґРѕРјРµРЅР° (Р­С‚Р°Рї 0 РўР—)
-        run_with_spinner "РўРµСЃС‚С‹ РЅРѕРІРѕРіРѕ РґРѕРјРµРЅР° (pytest)" \
+        # Юнит-тесты нового домена (Этап 0 ТЗ)
+        run_with_spinner "Тесты нового домена (pytest)" \
             sudo bash -c "docker-compose run --rm --no-deps --entrypoint '' remnawave-shopbot /app/.venv/bin/python -m pytest tests/ -q" || {
-            log_warn "Р§Р°СЃС‚СЊ С‚РµСЃС‚РѕРІ РЅРµ РїСЂРѕС€Р»Р° вЂ” РїСЂРѕРІРµСЂСЊС‚Рµ РІС‹РІРѕРґ РІС‹С€Рµ РїРµСЂРµРґ СЂРµР»РёР·РѕРј."
+            log_warn "Часть тестов не прошла — проверьте вывод выше перед релизом."
         }
         
         echo ""
-        echo -e "${GREEN}в”Џв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”“${NC}"
-        echo -e "${GREEN}в”ѓ           РћР‘РќРћР’Р›Р•РќРР• / Р’РћРЎРЎРўРђРќРћР’Р›Р•РќРР• Р—РђР’Р•Р РЁР•РќРћ!             в”ѓ${NC}"
-        echo -e "${GREEN}в”—в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”›${NC}"
+        echo -e "${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+        echo -e "${GREEN}┃           ОБНОВЛЕНИЕ / ВОССТАНОВЛЕНИЕ ЗАВЕРШЕНО!             ┃${NC}"
+        echo -e "${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
         echo ""
-        echo -e " ${BOLD}РђРґСЂРµСЃ РїР°РЅРµР»Рё:${NC}     https://${DOMAIN}:${YOOKASSA_PORT}/login"
-        echo -e " ${BOLD}Р”Р°РЅРЅС‹Рµ РІС…РѕРґР°:${NC}     ${CYAN}admin${NC} / ${CYAN}admin${NC}"
+        echo -e " ${BOLD}Адрес панели:${NC}     https://${DOMAIN}:${YOOKASSA_PORT}/login"
+        echo -e " ${BOLD}Данные входа:${NC}     ${CYAN}admin${NC} / ${CYAN}admin${NC}"
         echo -e " ${BOLD}Webhook URL:${NC}      https://${DOMAIN}:${YOOKASSA_PORT}/yookassa-webhook"
         echo ""
-        echo -e " ${BOLD}РќРѕРІРѕРµ РІ СЌС‚РѕР№ РІРµСЂСЃРёРё:${NC}"
-        echo -e "   вЂў Р“РёР±СЂРёРґРЅС‹Рµ РїРѕРґРїРёСЃРєРё Рё РґРѕРєСѓРїРєР° С‚СЂР°С„РёРєР° вЂ” РІРєР»СЋС‡Р°СЋС‚СЃСЏ per-host РІ Р°РґРјРёРЅРєРµ"
-        echo -e "     (РќР°СЃС‚СЂРѕР№РєРё в†’ С…РѕСЃС‚ в†’ В«Р“РёР±СЂРёРґ Рё РґРѕРєСѓРїРєР° С‚СЂР°С„РёРєР°'); РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РІС‹РєР»СЋС‡РµРЅС‹."
-        echo -e "   вЂў РќР°РґС‘Р¶РЅР°СЏ РѕР±СЂР°Р±РѕС‚РєР° РѕРїР»Р°С‚: fulfillment-РѕС‡РµСЂРµРґСЊ СЃ retry Рё manual review."
-        echo -e "   вЂў Р‘СЌРєР°РїС‹ С‚РµРїРµСЂСЊ СЃРѕРґРµСЂР¶Р°С‚ СЃРЅРёРјРєРё СЃРѕСЃС‚РѕСЏРЅРёСЏ Remnawave (snapshot)."
+        echo -e " ${BOLD}Новое в этой версии:${NC}"
+        echo -e "   • Гибридные подписки и докупка трафика — включаются per-host в админке"
+        echo -e "     (Настройки → хост → «Гибрид и докупка трафика'); по умолчанию выключены."
+        echo -e "   • Надёжная обработка оплат: fulfillment-очередь с retry и manual review."
+        echo -e "   • Бэкапы теперь содержат снимки состояния Remnawave (snapshot)."
         echo ""
         show_footer
         exit 0
     fi
 fi
 
-log_info "РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РїСЂРѕС†РµСЃСЃР° С‡РёСЃС‚РѕР№ СѓСЃС‚Р°РЅРѕРІРєРё..."
+log_info "Инициализация процесса чистой установки..."
 echo ""
 
 ensure_packages
@@ -435,12 +435,12 @@ ensure_services
 ensure_certbot_nginx
 
 if [[ ! -d "$PROJECT_DIR/.git" ]]; then
-    run_with_animated_spinner "РљР»РѕРЅРёСЂРѕРІР°РЅРёРµ СЂРµРїРѕР·РёС‚РѕСЂРёСЏ" git clone "$REPO_URL" "$PROJECT_DIR" || {
-        log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РєР»РѕРЅРёСЂРѕРІР°С‚СЊ СЂРµРїРѕР·РёС‚РѕСЂРёР№"
+    run_with_animated_spinner "Клонирование репозитория" git clone "$REPO_URL" "$PROJECT_DIR" || {
+        log_error "Не удалось клонировать репозиторий"
         exit 1
     }
 else
-    log_warn "РљР°С‚Р°Р»РѕРі РїСЂРѕРµРєС‚Р° СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚ ($PROJECT_DIR), РїСЂРѕРїСѓСЃРєР°РµРј РєР»РѕРЅРёСЂРѕРІР°РЅРёРµ"
+    log_warn "Каталог проекта уже существует ($PROJECT_DIR), пропускаем клонирование"
 fi
 cd "$PROJECT_DIR"
 
@@ -448,28 +448,28 @@ echo ""
 
 DOMAIN=""
 while [[ -z "$DOMAIN" ]]; do
-    log_input "Р’РІРµРґРёС‚Рµ РІР°С€ РґРѕРјРµРЅ (Р±РµР· http/s): "
+    log_input "Введите ваш домен (без http/s): "
     read -r USER_DOMAIN_INPUT < /dev/tty || true
     
     if [[ -z "$USER_DOMAIN_INPUT" ]]; then
-        log_warn "Р”РѕРјРµРЅ РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј."
+        log_warn "Домен не может быть пустым."
         continue
     fi
     
     DOMAIN=$(sanitize_domain "$USER_DOMAIN_INPUT")
     if [[ -z "$DOMAIN" ]]; then
-        log_warn "Р”РѕРјРµРЅ СЃРѕРґРµСЂР¶РёС‚ РЅРµРґРѕРїСѓСЃС‚РёРјС‹Рµ СЃРёРјРІРѕР»С‹."
+        log_warn "Домен содержит недопустимые символы."
         DOMAIN=""
     fi
 done
 
 EMAIL=""
 while [[ -z "$EMAIL" ]]; do
-    log_input "Р’РІРµРґРёС‚Рµ Email РґР»СЏ SSL (Let's Encrypt): "
+    log_input "Введите Email для SSL (Let's Encrypt): "
     read -r EMAIL < /dev/tty || true
     
     if [[ -z "$EMAIL" ]]; then
-        log_warn "Email РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј."
+        log_warn "Email не может быть пустым."
     fi
 done
 
@@ -479,25 +479,25 @@ SERVER_IP=$(get_server_ip || true)
 DOMAIN_IP=$(resolve_domain_ip "$DOMAIN" || true)
 
 if [[ -n "$SERVER_IP" ]]; then
-    log_success "IP СЃРµСЂРІРµСЂР°: $SERVER_IP"
+    log_success "IP сервера: $SERVER_IP"
 fi
 
 if [[ -n "$DOMAIN_IP" ]]; then
-    log_success "IP РґРѕРјРµРЅР°: $DOMAIN_IP"
+    log_success "IP домена: $DOMAIN_IP"
 fi
 
 if [[ -n "$SERVER_IP" ]] && [[ -n "$DOMAIN_IP" ]] && [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
-    log_warn "Р’РЅРёРјР°РЅРёРµ: IP СЃРµСЂРІРµСЂР° ($SERVER_IP) РѕС‚Р»РёС‡Р°РµС‚СЃСЏ РѕС‚ IP РґРѕРјРµРЅР° ($DOMAIN_IP)."
-    log_warn "Р­С‚Рѕ РјРѕР¶РµС‚ РїСЂРёРІРµСЃС‚Рё Рє РѕС€РёР±РєРµ РІС‹РґР°С‡Рё SSL СЃРµСЂС‚РёС„РёРєР°С‚Р°."
+    log_warn "Внимание: IP сервера ($SERVER_IP) отличается от IP домена ($DOMAIN_IP)."
+    log_warn "Это может привести к ошибке выдачи SSL сертификата."
     
     REPLY=""
     while true; do
-        log_input "РџСЂРѕРґРѕР»Р¶РёС‚СЊ РІСЃС‘ СЂР°РІРЅРѕ? (y/n): "
+        log_input "Продолжить всё равно? (y/n): "
         read -r -n1 REPLY < /dev/tty || true
         echo ""
         case "$REPLY" in
             [yY]) break ;;
-            [nN]) log_error "РЈСЃС‚Р°РЅРѕРІРєР° РѕС‚РјРµРЅРµРЅР°."; exit 1 ;;
+            [nN]) log_error "Установка отменена."; exit 1 ;;
             *) ;;
         esac
     done
@@ -506,35 +506,35 @@ fi
 echo ""
 
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
-    log_success "SSL СЃРµСЂС‚РёС„РёРєР°С‚С‹ СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓСЋС‚ РґР»СЏ $DOMAIN"
+    log_success "SSL сертификаты уже существуют для $DOMAIN"
 else
-    log_info "Р’С‹РїСѓСЃРє SSL СЃРµСЂС‚РёС„РёРєР°С‚Р° РѕС‚ Let's Encrypt РґР»СЏ $DOMAIN..."
+    log_info "Выпуск SSL сертификата от Let's Encrypt для $DOMAIN..."
     
-    run_with_animated_spinner "РџРѕР»СѓС‡РµРЅРёРµ СЃРµСЂС‚РёС„РёРєР°С‚Р° (РјРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ РІСЂРµРјСЏ)" \
+    run_with_animated_spinner "Получение сертификата (может занять время)" \
         sudo bash -c "certbot --nginx -d $DOMAIN --email $EMAIL --agree-tos --non-interactive --redirect --no-eff-email 2>&1" || {
-        log_error "РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ SSL СЃРµСЂС‚РёС„РёРєР°С‚. РџСЂРѕРІРµСЂСЊС‚Рµ:"
-        log_error "  - Р”РѕРјРµРЅ РїСЂР°РІРёР»СЊРЅРѕ СѓРєР°Р·Р°РЅ"
-        log_error "  - Р”РѕРјРµРЅ СѓРєР°Р·С‹РІР°РµС‚ РЅР° СЌС‚РѕС‚ СЃРµСЂРІРµСЂ ($SERVER_IP)"
-        log_error "  - РџРѕСЂС‚С‹ 80 Рё 443 РѕС‚РєСЂС‹С‚С‹"
-        log_error "  - Email РїСЂР°РІРёР»СЊРЅС‹Р№"
+        log_error "Не удалось получить SSL сертификат. Проверьте:"
+        log_error "  - Домен правильно указан"
+        log_error "  - Домен указывает на этот сервер ($SERVER_IP)"
+        log_error "  - Порты 80 и 443 открыты"
+        log_error "  - Email правильный"
         exit 1
     }
 fi
 
 echo ""
-log_input "РџРѕСЂС‚ РґР»СЏ РІРµР±С…СѓРєРѕРІ YooKassa [1-65535] (default: 8443): "
+log_input "Порт для вебхуков YooKassa [1-65535] (default: 8443): "
 read -r YOOKASSA_PORT_INPUT < /dev/tty || true
 YOOKASSA_PORT="${YOOKASSA_PORT_INPUT:-8443}"
 
 if ! [[ "$YOOKASSA_PORT" =~ ^[0-9]+$ ]] || (( YOOKASSA_PORT < 1 || YOOKASSA_PORT > 65535 )); then
-    log_error "РџРѕСЂС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј РѕС‚ 1 РґРѕ 65535."
+    log_error "Порт должен быть целым числом от 1 до 65535."
     exit 1
 fi
 
 if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q 'Status: active'; then
-    run_with_spinner "РћС‚РєСЂС‹С‚РёРµ РїРѕСЂС‚РѕРІ UFW (80, 443, 1488, ${YOOKASSA_PORT})" \
+    run_with_spinner "Открытие портов UFW (80, 443, 1488, ${YOOKASSA_PORT})" \
         sudo bash -c "ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 1488/tcp && ufw allow ${YOOKASSA_PORT}/tcp" || {
-        log_warn "РќРµ СѓРґР°Р»РѕСЃСЊ РЅР°СЃС‚СЂРѕРёС‚СЊ UFW"
+        log_warn "Не удалось настроить UFW"
     }
 fi
 
@@ -545,47 +545,47 @@ echo ""
 show_docker_images
 echo ""
 
-run_with_animated_spinner "РЎР±РѕСЂРєР° Рё Р·Р°РїСѓСЃРє Docker РєРѕРЅС‚РµР№РЅРµСЂРѕРІ" \
+run_with_animated_spinner "Сборка и запуск Docker контейнеров" \
     sudo bash -c "if [ -n \"\$(docker-compose ps -q 2>/dev/null)\" ]; then docker-compose down --remove-orphans; fi; docker-compose up -d --build" || {
-    log_error "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ Docker РєРѕРЅС‚РµР№РЅРµСЂС‹"
+    log_error "Не удалось запустить Docker контейнеры"
     exit 1
 }
 
-# РњРёРіСЂР°С†РёСЏ Р‘Р” РЅРѕРІРѕРіРѕ РґРѕРјРµРЅР° (schema_version=2): РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РїСЂРё СЃС‚Р°СЂС‚Рµ,
-# РЅРѕ РїСЂРѕРіРѕРЅСЏРµРј СЏРІРЅРѕ, С‡С‚РѕР±С‹ РѕС€РёР±РєРё Р±С‹Р»Рё РІРёРґРЅС‹ СЃСЂР°Р·Сѓ
-run_with_spinner "РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ Рё РјРёРіСЂР°С†РёСЏ Р‘Р” (initialize_db)" \
+# Миграция БД нового домена (schema_version=2): выполняется при старте,
+# но прогоняем явно, чтобы ошибки были видны сразу
+run_with_spinner "Инициализация и миграция БД (initialize_db)" \
     sudo bash -c "docker-compose run --rm --no-deps --entrypoint '' remnawave-shopbot /app/.venv/bin/python -c 'from shop_bot.data_manager.database import initialize_db; initialize_db()'" || {
-    log_warn "РњРёРіСЂР°С†РёСЏ Р·Р°РІРµСЂС€РёР»Р°СЃСЊ СЃ РѕС€РёР±РєРѕР№ вЂ” РїСЂРѕРІРµСЂСЊС‚Рµ: docker-compose logs remnawave-shopbot"
+    log_warn "Миграция завершилась с ошибкой — проверьте: docker-compose logs remnawave-shopbot"
 }
 
 echo ""
-echo -e "${GREEN}в”Џв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”“${NC}"
-echo -e "${GREEN}в”ѓ                  РЈРЎРўРђРќРћР’РљРђ Р—РђР’Р•Р РЁР•РќРђ!                        в”ѓ${NC}"
-echo -e "${GREEN}в”—в”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”Ѓв”›${NC}"
+echo -e "${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+echo -e "${GREEN}┃                  УСТАНОВКА ЗАВЕРШЕНА!                        ┃${NC}"
+echo -e "${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}"
 echo ""
-echo -e " ${BOLD}РђРґСЂРµСЃ РїР°РЅРµР»Рё:${NC}     https://${DOMAIN}:${YOOKASSA_PORT}/login"
-echo -e " ${BOLD}Р”Р°РЅРЅС‹Рµ РІС…РѕРґР°:${NC}     ${CYAN}admin${NC} / ${CYAN}admin${NC}"
+echo -e " ${BOLD}Адрес панели:${NC}     https://${DOMAIN}:${YOOKASSA_PORT}/login"
+echo -e " ${BOLD}Данные входа:${NC}     ${CYAN}admin${NC} / ${CYAN}admin${NC}"
 echo -e " ${BOLD}Webhook URL:${NC}      https://${DOMAIN}:${YOOKASSA_PORT}/yookassa-webhook"
 echo ""
-echo -e " ${BOLD}Webhook endpoints (РµРґРёРЅС‹Р№ РїРѕС‚РѕРє РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ):${NC}"
+echo -e " ${BOLD}Webhook endpoints (единый поток подтверждения):${NC}"
 echo -e "   YooKassa:  https://${DOMAIN}:${YOOKASSA_PORT}/yookassa-webhook"
 echo -e "   CryptoBot: https://${DOMAIN}:${YOOKASSA_PORT}/cryptobot-webhook"
 echo -e "   Heleket:   https://${DOMAIN}:${YOOKASSA_PORT}/heleket-webhook"
 echo -e "   Platega:   https://${DOMAIN}:${YOOKASSA_PORT}/platega-webhook"
 echo -e "   TON:       https://${DOMAIN}:${YOOKASSA_PORT}/ton-webhook"
-echo -e "   Р®Money:    https://${DOMAIN}:${YOOKASSA_PORT}/yoomoney-webhook"
+echo -e "   ЮMoney:    https://${DOMAIN}:${YOOKASSA_PORT}/yoomoney-webhook"
 echo ""
-echo -e " ${BOLD}РќРѕРІРѕРµ РІ СЌС‚РѕР№ РІРµСЂСЃРёРё:${NC}"
-echo -e "   вЂў Р“РёР±СЂРёРґРЅС‹Рµ РїРѕРґРїРёСЃРєРё Рё РґРѕРєСѓРїРєР° С‚СЂР°С„РёРєР° (WiFi/LTE, СЃРіРѕСЂР°РµРјС‹Рµ/РЅРµСЃРіРѕСЂР°РµРјС‹Рµ Р“Р‘)"
-echo -e "     вЂ” РІРєР»СЋС‡Р°СЋС‚СЃСЏ per-host РІ Р°РґРјРёРЅРєРµ, РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ РІС‹РєР»СЋС‡РµРЅС‹."
-echo -e "   вЂў Fulfillment-РѕС‡РµСЂРµРґСЊ: РїРѕРІС‚РѕСЂРЅС‹Рµ webhook РЅРµ РІС‹РґР°СЋС‚ СѓСЃР»СѓРіСѓ РґРІР°Р¶РґС‹,"
-echo -e "     РѕС€РёР±РєРё РїРѕСЃР»Рµ РѕРїР»Р°С‚С‹ СЂРµС‚СЂР°СЏС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё, Р·Р°С‚РµРј manual review."
-echo -e "   вЂў Р‘СЌРєР°РїС‹ СЃРѕРґРµСЂР¶Р°С‚ СЃРЅРёРјРєРё СЃРѕСЃС‚РѕСЏРЅРёСЏ Remnawave (backup runs + snapshots)."
+echo -e " ${BOLD}Новое в этой версии:${NC}"
+echo -e "   • Гибридные подписки и докупка трафика (WiFi/LTE, сгораемые/несгораемые ГБ)"
+echo -e "     — включаются per-host в админке, по умолчанию выключены."
+echo -e "   • Fulfillment-очередь: повторные webhook не выдают услугу дважды,"
+echo -e "     ошибки после оплаты ретраятся автоматически, затем manual review."
+echo -e "   • Бэкапы содержат снимки состояния Remnawave (backup runs + snapshots)."
 echo ""
-echo -e " ${BOLD}SSL РЎРµСЂС‚РёС„РёРєР°С‚С‹:${NC}"
-echo -e "   РџСѓР±Р»РёС‡РЅС‹Р№:  ${YELLOW}/etc/letsencrypt/live/${DOMAIN}/fullchain.pem${NC}"
-echo -e "   РџСЂРёРІР°С‚РЅС‹Р№:  ${YELLOW}/etc/letsencrypt/live/${DOMAIN}/privkey.pem${NC}"
+echo -e " ${BOLD}SSL Сертификаты:${NC}"
+echo -e "   Публичный:  ${YELLOW}/etc/letsencrypt/live/${DOMAIN}/fullchain.pem${NC}"
+echo -e "   Приватный:  ${YELLOW}/etc/letsencrypt/live/${DOMAIN}/privkey.pem${NC}"
 echo ""
-echo -e "${YELLOW} вљ   РџРѕР¶Р°Р»СѓР№СЃС‚Р°, СЃРјРµРЅРёС‚Рµ РїР°СЂРѕР»СЊ СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ РІС…РѕРґР°!${NC}"
+echo -e "${YELLOW} ⚠  Пожалуйста, смените пароль сразу после входа!${NC}"
 echo ""
 show_footer
