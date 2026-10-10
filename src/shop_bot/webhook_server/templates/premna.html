@@ -2,6 +2,18 @@
 {% block title %}Remnawave{% endblock %}
 
 {% block content %}
+{# Безопасные дефолты: при недоступной панели statistics=None, шаблон не должен падать #}
+{% set statistics = statistics or {
+    'users': {'online': '—', 'active': '—', 'total': '—', 'expired': '—', 'disabled': '—', 'limited': '—', 'never_online': '—', 'today': '—'},
+    'nodes': '—',
+    'memory': {'used': '—', 'total': '—'},
+    'traffic': {
+        'today': {'current': '—', 'previous': '—', 'trend': 'flat'},
+        'week': {'current': '—', 'previous': '—', 'trend': 'flat'},
+        'month': {'current': '—', 'previous': '—', 'trend': 'flat'},
+        'year': {'current': '—', 'previous': '—', 'trend': 'flat'},
+    },
+} %}
 <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
     <div>
         <div class="mb-2 flex items-center gap-2 text-primary">

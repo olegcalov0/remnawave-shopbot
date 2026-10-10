@@ -1268,6 +1268,49 @@ def _ensure_webapp_settings_table(cursor: sqlite3.Cursor):
 # ===========================================
 
 
+# ===== _RECOVER_VPN_KEYS_LEGACY =====
+def _count_rows_safe(cursor: sqlite3.Cursor, table: str) -> int | None:
+    try:
+        return cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    except Exception:
+        return None
+
+
+def _table_exists_safe(cursor: sqlite3.Cursor, table: str) -> bool:
+    try:
+        return bool(cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone())
+    except Exception:
+        return False
+
+
+def _recover_vpn_keys_legacy(cursor: sqlite3.Cursor) -> None:
+    """Аварийное восстановление после неудачного rebuild vpn_keys.
+
+    Если _rebuild_vpn_keys_table упал посередине (ALTER RENAME выполнен, INSERT нет),
+    данные остаются в vpn_keys_legacy, а vpn_keys пустая. Копируем данные обратно
+    по пересечению колонок, чего не делает штатный rollback (DDL в SQLite
+    транзакционен, но смешанный сбой может оставить несогласованное состояние).
+    """
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vpn_keys_legacy'")
+        if not cursor.fetchone():
+            return
+        cursor.execute("PRAGMA table_info(vpn_keys)")
+        new_cols = [row[1] for row in cursor.fetchall()]
+        cursor.execute("PRAGMA table_info(vpn_keys_legacy)")
+        old_cols = {row[1] for row in cursor.fetchall()}
+        shared = [c for c in new_cols if c in old_cols]
+        if not shared:
+            return
+        cols = ", ".join(shared)
+        cursor.execute(f"INSERT INTO vpn_keys ({cols}) SELECT {cols} FROM vpn_keys_legacy")
+        cursor.execute("DROP TABLE vpn_keys_legacy")
+        logging.info("Миграция: восстановлены данные vpn_keys из vpn_keys_legacy (%d колонок)", len(shared))
+    except Exception as e:
+        logging.error("Миграция: не удалось восстановить vpn_keys_legacy: %s", e)
+
+
 # ===== RUN_MIGRATION =====
 def run_migration():
     if not DB_FILE.exists(): logging.error("Файл базы данных отсутствует, миграция пропущена."); return
@@ -1302,6 +1345,10 @@ def run_migration():
                         conn.rollback()
                     except Exception:
                         pass
+                    # критичные шаги vpn_keys не должны оставлять "полу-rebuild":
+                    # если осталась vpn_keys_legacy — восстанавливаем данные вручную
+                    if step_name == "vpn_keys_schema":
+                        _recover_vpn_keys_legacy(cursor)
 
             _legacy_step("users_columns", lambda: _ensure_users_columns(cursor))
             _legacy_step("hosts_columns", lambda: _ensure_hosts_columns(cursor))
@@ -1310,6 +1357,10 @@ def run_migration():
             _legacy_step("support_tickets_columns", lambda: _ensure_support_tickets_columns(cursor))
             _legacy_step("support_messages_columns", lambda: _ensure_support_messages_columns(cursor))
             _legacy_step("vpn_keys_schema", lambda: _ensure_vpn_keys_schema(cursor))
+            # фиксируем rebuild vpn_keys немедленно: позднейший сбой legacy-шага
+            # не должен откатывать пересоздание таблицы (иначе данные остаются
+            # в откаченном RENAME, а vpn_keys пустеет)
+            conn.commit()
             _legacy_step("vpn_keys_comment", lambda: _ensure_table_column(cursor, "vpn_keys", "comment_key", "TEXT"))
             _legacy_step("vpn_keys_pinned", lambda: _ensure_table_column(cursor, "vpn_keys", "is_pinned", "BOOLEAN DEFAULT 0"))
             _legacy_step("ssh_targets", lambda: _ensure_ssh_targets_table(cursor))
@@ -1376,6 +1427,15 @@ def run_migration():
 
             cursor.execute("PRAGMA foreign_keys = ON")
             conn.commit()
+
+            # Schema repair: добавить недостающие колонки legacy-таблиц
+            # (восстановленные старые бэкапы могут не иметь registration_date,
+            # amount_rub, months и др. — дашборд и статистика без них падают)
+            try:
+                from shop_bot.data_manager.schema_repair import repair_schema
+                repair_schema(conn)
+            except Exception as e:
+                logging.error("Сбой schema repair: %s", e)
     except sqlite3.Error as e:
         logging.error("Сбой миграции базы данных: %s", e)
 

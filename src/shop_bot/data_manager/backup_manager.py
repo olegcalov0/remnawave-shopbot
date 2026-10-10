@@ -392,6 +392,19 @@ def restore_from_file(uploaded_path: Path, *, allow_incomplete: bool = False) ->
             migration_error = str(e)
             logger.error("Восстановление: ошибка миграции: %s", e)
 
+        # schema repair: добираем недостающие колонки legacy-таблиц, которые
+        # могут отсутствовать в очень старых бэкапах (registration_date и пр.)
+        if status == 'legacy':
+            try:
+                with sqlite3.connect(DB_FILE) as conn:
+                    from shop_bot.data_manager.schema_repair import repair_schema
+                    added = repair_schema(conn)
+                if added:
+                    logger.info("Восстановление: schema repair добавил колонки: %s", ", ".join(added[:30]))
+                    message += f" Добавлены отсутствующие колонки: {len(added)}."
+            except Exception as e:
+                logger.error("Восстановление: ошибка schema repair: %s", e)
+
         # контрольная проверка после миграции
         post_ok, post_status, post_msg = validate_db_file(DB_FILE)
         final_ok = post_ok and post_status == 'ok'
