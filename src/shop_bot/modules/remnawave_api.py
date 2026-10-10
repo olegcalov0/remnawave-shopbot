@@ -320,6 +320,32 @@ async def get_user_by_email(email: str, *, host_name: str | None = None) -> dict
     return data if isinstance(data, dict) else None
 
 
+async def get_user_by_username(username: str, *, host_name: str | None = None) -> dict[str, Any] | None:
+    """Поиск пользователя по username через /api/users/stream."""
+    if not username:
+        return None
+    params = {"username": username.strip(), "size": 1}
+    if host_name:
+        response = await _request_for_host(host_name, "GET", "/api/users/stream", params=params)
+    else:
+        response = await _request("GET", "/api/users/stream", params=params)
+    payload = response.json()
+    data: Any
+    if isinstance(payload, dict):
+        inner = payload.get("response")
+        data = inner if inner is not None else payload
+    else:
+        data = payload
+    if isinstance(data, dict):
+        data = data.get("users") or data.get("data") or []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                return item
+        return None
+    return data if isinstance(data, dict) else None
+
+
 async def _resolve_user_id(user_id: int | str | None, *, host_name: str | None = None) -> int | None:
     """Return a Remnawave v3 numeric user ID, repairing legacy UUID records by email."""
     if user_id is None:
@@ -548,7 +574,25 @@ async def ensure_user(
         method = "POST"
         path = "/api/users"
 
-    response = await _request_for_host(host_name, method, path, json_payload=payload, expected_status=(200, 201))
+    try:
+        response = await _request_for_host(host_name, method, path, json_payload=payload, expected_status=(200, 201))
+    except RemnawaveAPIError as exc:
+        # A019: username уже занят другим пользователем (с другим email) —
+        # ищем по username и обновляем существующего вместо создания нового
+        if method == "POST" and "A019" in str(exc) and "username already exists" in str(exc).lower():
+            logger.info("Remnawave: username %s уже занят на '%s' — ищу существующего пользователя",
+                        generated_username, host_name)
+            existing = await get_user_by_username(generated_username, host_name=host_name)
+            if existing and existing.get("id"):
+                logger.info("Remnawave: найден пользователь по username %s (id=%s) — обновляю",
+                            generated_username, existing.get("id"))
+                payload["id"] = existing["id"]
+                response = await _request_for_host(host_name, "PATCH", "/api/users",
+                                                   json_payload=payload, expected_status=(200, 201))
+            else:
+                raise
+        else:
+            raise
     data = response.json() or {}
     result = data.get("response") if isinstance(data, dict) else None
     if not result:

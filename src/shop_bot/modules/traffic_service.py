@@ -141,8 +141,12 @@ async def validate_before_payment(*, user_id: int, key_id: int, traffic_type: st
         raise TrafficPurchaseError("ключ не принадлежит пользователю")
 
     expire = uc.parse_iso_or_none(key.get("expire_at") or key.get("expiry_date"))
-    if expire and expire <= uc.get_msk_time():
-        raise TrafficPurchaseError("подписка истекла")
+    if expire:
+        # БД хранит naive datetime; get_msk_time() — aware. Нормализуем.
+        if expire.tzinfo is None:
+            expire = expire.replace(tzinfo=uc.MSK_TZ)
+        if expire <= uc.get_msk_time():
+            raise TrafficPurchaseError("подписка истекла")
 
     host = tr_repo.get_host_hybrid_settings(key["host_name"])
     if not host or int(host.get("traffic_purchase_enabled") or 0) != 1:

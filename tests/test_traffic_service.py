@@ -1,6 +1,7 @@
 """Тесты логики докупки: цена, carry, reset, направления WiFi/LTE (Этап 4 ТЗ)."""
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import sys
 from datetime import datetime
@@ -238,3 +239,36 @@ def test_referral_gb_rounding():
     assert reward(18, 10) == 2
     assert reward(4, 10) == 1
     assert reward(25, 10) == 3
+
+
+def test_validate_before_payment_naive_expire_no_crash(test_db):
+    """TypeError: can't compare offset-naive and offset-aware datetimes.
+
+    БД хранит expire_at без tzinfo; get_msk_time() — aware.
+    """
+    with sqlite3.connect(test_db) as conn:
+        _seed_host(conn)
+        key_id = _seed_key(conn)
+        # naive datetime в БД (как сохраняет SQLite)
+        conn.execute("UPDATE vpn_keys SET expire_at = ? WHERE key_id = ?",
+                     ("2026-01-01 00:00:00", key_id))
+        conn.commit()
+
+    from shop_bot.modules import traffic_service
+    # expired naive datetime -> должна вызваться TrafficPurchaseError, а не TypeError
+    with pytest.raises(traffic_service.TrafficPurchaseError, match="истекла"):
+        asyncio.run(traffic_service.validate_before_payment(
+            user_id=1, key_id=key_id, traffic_type="wifi", gb_amount=5, non_burnable=False))
+
+    # будущая naive дата — не падает
+    with sqlite3.connect(test_db) as conn:
+        conn.execute("UPDATE vpn_keys SET expire_at = ? WHERE key_id = ?",
+                     ("2099-01-01 00:00:00", key_id))
+        conn.commit()
+    # validate_before_payment вызовет API (замокан):
+    from shop_bot.modules import remnawave_api
+    async def fake_usage(uid, host_name=None):
+        return {"limit_bytes": 0, "used_bytes": 0, "status": "ACTIVE", "expire_at": None}
+    remnawave_api.get_user_traffic_usage = fake_usage
+    asyncio.run(traffic_service.validate_before_payment(
+        user_id=1, key_id=key_id, traffic_type="wifi", gb_amount=5, non_burnable=False))
