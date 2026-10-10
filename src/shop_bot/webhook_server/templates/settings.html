@@ -605,6 +605,17 @@
                                 <input type="file" id="db_file" name="db_file" accept=".zip,.db" class="hidden" />
                             </div>
 
+                            <!-- Подтверждение для неполного/старого бэкапа (Этап 8/ТЗ) -->
+                            <label class="flex items-start gap-2 mt-3 bg-amber-500/5 border border-amber-500/15 rounded-xl p-3 cursor-pointer">
+                                <input type="checkbox" name="allow_incomplete" value="1" class="mt-0.5 accent-amber-500" />
+                                <span class="text-[10px] text-amber-300/90 leading-snug">
+                                    <b>Разрешить восстановление неполного/старого бэкапа.</b><br>
+                                    Если бэкап содержит неполный снимок Remnawave или это БД предыдущей версии —
+                                    загрузить её как основную и выполнить миграцию вперёд. Без галочки
+                                    неполный бэкап будет отклонён, а старая БД принята с предупреждением и мигрирована.
+                                </span>
+                            </label>
+
                             <button type="submit" formaction="{{ url_for('restore_db_route') }}"
                                 formenctype="multipart/form-data"
                                 class="w-full py-2.5 rounded-xl bg-red-500/20 text-red-500 hover:bg-red-500/30 text-[10px] font-bold uppercase tracking-widest transition-all border border-red-500/10 flex items-center justify-center gap-2"

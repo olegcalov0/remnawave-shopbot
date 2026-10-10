@@ -2780,15 +2780,19 @@ def create_webhook_app(bot_controller_instance):
     @login_required
     def restore_db_route():
         try:
+            # явное подтверждение администратора для неполного бэкапа
+            allow_incomplete = request.form.get('allow_incomplete') == '1'
 
             existing = (request.form.get('existing_backup') or '').strip()
             ok = False
+            message = ""
             if existing:
 
                 base = backup_manager.BACKUPS_DIR
                 candidate = (base / existing).resolve()
                 if str(candidate).startswith(str(base.resolve())) and os.path.isfile(candidate):
-                    ok = backup_manager.restore_from_file(candidate)
+                    ok, message = backup_manager.restore_from_file(
+                        candidate, allow_incomplete=allow_incomplete)
                 else:
                     flash('Выбранный бэкап не найден.', 'danger')
                     return redirect(request.referrer or url_for('settings_page', tab='panel'))
@@ -2810,11 +2814,16 @@ def create_webhook_app(bot_controller_instance):
                     pass
                 dest_path = dest_dir / f"uploaded-{ts}-{os.path.basename(filename)}"
                 file.save(dest_path)
-                ok = backup_manager.restore_from_file(dest_path)
+                ok, message = backup_manager.restore_from_file(
+                    dest_path, allow_incomplete=allow_incomplete)
             if ok:
-                flash('Восстановление выполнено успешно.', 'success')
+                # предупреждение о неполном/legacy-бэкапе доносим отдельным flash
+                if message.startswith('⚠️') or 'НЕПОЛНЫЙ' in message or 'СТАРОЙ' in message:
+                    flash(f'Восстановление выполнено с предупреждением: {message}', 'warning')
+                else:
+                    flash('Восстановление выполнено успешно.', 'success')
             else:
-                flash('Восстановление не удалось. Проверьте файл и повторите.', 'danger')
+                flash(f'Восстановление не удалось: {message}', 'danger')
             return redirect(request.referrer or url_for('settings_page', tab='panel'))
         except Exception as e:
             logger.error(f"Ошибка восстановления БД: {e}", exc_info=True)

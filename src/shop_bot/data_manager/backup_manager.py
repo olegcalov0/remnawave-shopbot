@@ -238,45 +238,63 @@ async def send_backup_to_admins(bot: Bot, zip_path: Path) -> int:
         return cnt
 
 
-def validate_db_file(db_path: Path) -> bool:
+def validate_db_file(db_path: Path) -> tuple[bool, str, str]:
     """
-    Валидация файла БД: основные таблицы + schema version + новые
-    обязательные таблицы (Этап 8 ТЗ, п.5).
+    Валидация файла БД. Возвращает (ok, status, message).
+
+    Статусы:
+      - 'ok':        полностью совместимая БД (schema >= 2, все таблицы)
+      - 'legacy':    рабочая БД старой версии (core-таблицы есть, schema < 2);
+                     принимается с миграцией вперёд + предупреждением
+      - 'incomplete':snapshot неполный (только для архивов с manifest)
+      - 'invalid':   битый/несовместимый файл (нет core-таблиц)
     """
     try:
         with sqlite3.connect(db_path) as conn:
             cur = conn.cursor()
 
-            required_tables = {
-                'users', 'vpn_keys', 'transactions', 'bot_settings', 'xui_hosts',
-                'traffic_purchases', 'payment_fulfillment_jobs', 'hybrid_subscription_pairs',
-            }
             cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
             present = {row[0] for row in cur.fetchall()}
-            missing = required_tables - present
-            if missing:
-                logger.warning(f"Восстановление: в загруженной БД отсутствуют таблицы: {missing}")
+
+            # core-таблицы обязательны всегда
+            core = {'users', 'vpn_keys', 'transactions', 'bot_settings', 'xui_hosts'}
+            missing_core = core - present
+            if missing_core:
+                return False, 'invalid', f"отсутствуют core-таблицы: {sorted(missing_core)}"
 
             if not ('users' in present and 'bot_settings' in present):
-                return False
+                return False, 'invalid', "нет users/bot_settings"
 
-            # schema version: минимально поддерживаемая
+            # schema version
+            version = 0
             try:
                 cur.execute("SELECT value FROM bot_settings WHERE key='schema_version'")
                 row = cur.fetchone()
                 version = int((row[0] if row else "0") or 0)
             except Exception:
                 version = 0
-            from shop_bot.modules.domain_constants import SCHEMA_VERSION_MIN_SUPPORTED
+            from shop_bot.modules.domain_constants import SCHEMA_VERSION_MIN_SUPPORTED, SCHEMA_VERSION_CURRENT
+
             if version < int(SCHEMA_VERSION_MIN_SUPPORTED):
-                logger.warning(
-                    "Восстановление: схема БД (%s) старее минимально поддерживаемой (%s)",
-                    version, SCHEMA_VERSION_MIN_SUPPORTED)
-                return False
-            return True
+                missing_new = {'traffic_purchases', 'payment_fulfillment_jobs',
+                               'hybrid_subscription_pairs'} - present
+                return True, 'legacy', (
+                    f"схема БД (v{version}) старее минимально поддерживаемой "
+                    f"(v{SCHEMA_VERSION_MIN_SUPPORTED}); отсутствуют таблицы нового домена: "
+                    f"{sorted(missing_new)}; БД будет принята и мигрирована вперёд")
+
+            # совместимая схема, но проверим наличие новых таблиц (не маскируем рассинхрон)
+            missing_new = {'traffic_purchases', 'payment_fulfillment_jobs',
+                           'hybrid_subscription_pairs'} - present
+            if missing_new:
+                return True, 'legacy', (
+                    f"schema_version={version}, но отсутствуют таблицы нового домена: "
+                    f"{sorted(missing_new)}; будет выполнена миграция")
+
+            return True, 'ok', f"БД совместима (schema v{version}/{SCHEMA_VERSION_CURRENT})"
     except Exception as e:
         logger.error(f"Восстановление: ошибка валидации файла БД: {e}")
-        return False
+        return False, 'invalid', f"ошибка чтения файла: {e}"
 
 
 def check_backup_snapshot_status(archive_path: Path) -> str | None:
@@ -292,23 +310,33 @@ def check_backup_snapshot_status(archive_path: Path) -> str | None:
     return None
 
 
-def restore_from_file(uploaded_path: Path, *, allow_incomplete: bool = False) -> bool:
+def restore_from_file(uploaded_path: Path, *, allow_incomplete: bool = False) -> tuple[bool, str]:
     """
     Восстанавливает основную БД из переданного файла .db или .zip (внутри .db).
     Делает резервную копию текущей БД на случай отката.
-    incomplete-архив требует явного allow_incomplete=True (Этап 8 ТЗ, п.5).
+
+    Политика (обновлено по требованию владельца):
+      - битой БД (нет core-таблиц) — отказ;
+      - старой/legacy БД (schema < 2 или нет таблиц нового домена) — ПРИНИМАЕТСЯ
+        с предупреждением и мигрируется вперёд (run_migration);
+      - архив с incomplete-снимком — принимается, но требует явного
+        allow_incomplete=True (кнопка подтверждения в UI).
+    Возвращает (ok, message) — message показывается администратору.
     """
+    tmp_dir: Path | None = None
     try:
         if not uploaded_path.exists():
             logger.error(f"Восстановление: файл не найден: {uploaded_path}")
-            return False
+            return False, "файл не найден"
 
-        # предупреждение о неполном snapshot: без явного подтверждения отклоняем
-        if not allow_incomplete:
-            snap = check_backup_snapshot_status(uploaded_path)
-            if snap == "incomplete":
-                logger.warning("Восстановление: архив с неполным snapshot требует явного подтверждения")
-                return False
+        # incomplete snapshot: предупреждаем, но принимаем (требуется явное подтверждение)
+        snapshot_warning = ""
+        snap = check_backup_snapshot_status(uploaded_path)
+        if snap == "incomplete":
+            if not allow_incomplete:
+                return False, ("бэкап содержит НЕПОЛНЫЙ снимок Remnawave. "
+                               "Подтвердите восстановление неполного бэкапа.")
+            snapshot_warning = "Снимок Remnawave в бэкапе неполный; часть данных панели могла не сохраниться."
 
         tmp_dir = BACKUPS_DIR / f"restore-{_timestamp()}"
         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -324,21 +352,24 @@ def restore_from_file(uploaded_path: Path, *, allow_incomplete: bool = False) ->
                             break
             except Exception as e:
                 logger.error(f"Восстановление: не удалось распаковать архив: {e}")
-                return False
+                return False, "не удалось распаковать архив"
         else:
 
             candidate_db = uploaded_path
 
         if not candidate_db or not candidate_db.exists():
             logger.error("Восстановление: в переданном файле не найдено .db")
-            return False
+            return False, "в файле не найдена база данных"
 
+        ok, status, message = validate_db_file(candidate_db)
+        if not ok:
+            logger.error(f"Восстановление: файл БД не прошёл проверку: {message}")
+            return False, f"файл не прошёл проверку: {message}"
 
-        if not validate_db_file(candidate_db):
-            logger.error("Восстановление: файл БД не прошёл проверку")
-            return False
+        if status == 'legacy':
+            logger.warning("Восстановление: принята БД старой схемы: %s", message)
 
-
+        # резервная копия текущей БД перед заменой
         backup_before = BACKUPS_DIR / f"before-restore-{_timestamp()}.zip"
         cur_backup = create_backup_file()
         if cur_backup and cur_backup.exists():
@@ -347,19 +378,68 @@ def restore_from_file(uploaded_path: Path, *, allow_incomplete: bool = False) ->
             except Exception:
                 pass
 
-
         with sqlite3.connect(candidate_db) as src:
             with sqlite3.connect(DB_FILE) as dst:
                 src.backup(dst)
 
-
+        # миграция ТОЛЬКО вперёд: для legacy создаёт таблицы нового домена,
+        # идемпотентна для уже совместимой БД
+        migration_error = ""
         try:
             rw_repo.run_migration()
+            logger.info("Восстановление: миграция выполнена")
+        except Exception as e:
+            migration_error = str(e)
+            logger.error("Восстановление: ошибка миграции: %s", e)
+
+        # контрольная проверка после миграции
+        post_ok, post_status, post_msg = validate_db_file(DB_FILE)
+        final_ok = post_ok and post_status == 'ok'
+        if not final_ok and not migration_error:
+            logger.warning("Восстановление: после миграции статус %s (%s)", post_status, post_msg)
+
+        # audit восстановления
+        try:
+            from shop_bot.data_manager import database as _db
+            _db.update_setting("last_restore_info", _json_dump({
+                "restored_at": uc_now_str(),
+                "source": str(uploaded_path.name),
+                "source_status": status,
+                "message": message,
+                "snapshot": snap,
+                "migration_error": migration_error,
+            }))
         except Exception:
             pass
 
-        logger.info("Восстановление: база данных успешно заменена")
-        return True
+        parts = []
+        if status == 'legacy':
+            parts.append("⚠️ Загружена БД СТАРОЙ версии: " + message + ".")
+            parts.append("Она принята как основная и мигрирована к текущей схеме; "
+                         "данные пользователей сохранены, функции нового домена включены.")
+        else:
+            parts.append("БД совместима: " + message + ".")
+        if snapshot_warning:
+            parts.append("⚠️ " + snapshot_warning)
+        if migration_error:
+            parts.append(f"⚠️ Миграция завершилась с ошибкой: {migration_error}. "
+                         f"Проверьте логи; текущая БД сохранена в {backup_before.name}.")
+        if not final_ok and not migration_error:
+            parts.append("⚠️ После миграции БД всё ещё не полностью совместима: " + post_msg)
+
+        logger.info("Восстановление: база данных успешно заменена (статус источника: %s)", status)
+        return True, " ".join(parts)
     except Exception as e:
         logger.error(f"Восстановление: ошибка: {e}", exc_info=True)
-        return False
+        return False, f"внутренняя ошибка восстановления: {e}"
+    finally:
+        if tmp_dir:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def _json_dump(data: dict) -> str:
+    import json as _json
+    return _json.dumps(data, ensure_ascii=False)

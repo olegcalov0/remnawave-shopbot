@@ -1140,6 +1140,18 @@ def _ensure_traffic_tables(cursor: sqlite3.Cursor) -> None:
 
 # ===== _ENSURE_FULFILLMENT_TABLES (раздел 4.9) =====
 def _ensure_fulfillment_tables(cursor: sqlite3.Cursor) -> None:
+    # pending_transactions может отсутствовать в старом бэкапе — создаём при необходимости
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_transactions (
+            payment_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            amount_rub REAL,
+            metadata TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS payment_fulfillment_jobs (
             job_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1200,10 +1212,16 @@ def _ensure_backup_snapshot_tables(cursor: sqlite3.Cursor) -> None:
 
 # ===== _ENSURE_SCHEMA_VERSION =====
 def _ensure_schema_version(cursor: sqlite3.Cursor) -> None:
-    """Фиксация версии схемы для проверки при восстановлении бэкапа (Этап 1, п.6)."""
+    """Фиксация версии схемы для проверки при восстановлении бэкапа (Этап 1, п.6).
+
+    Версия только повышается (миграция вперёд), но не понижается:
+    восстановление совместимой БД поверх более новой не должно затирать версию.
+    """
     from shop_bot.modules.domain_constants import SCHEMA_VERSION_KEY, SCHEMA_VERSION_CURRENT
     cursor.execute(
-        "INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)",
+        "INSERT INTO bot_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value "
+        "WHERE CAST(bot_settings.value AS INTEGER) < CAST(excluded.value AS INTEGER)",
         (SCHEMA_VERSION_KEY, SCHEMA_VERSION_CURRENT),
     )
 
@@ -1260,28 +1278,53 @@ def run_migration():
         with sqlite3.connect(DB_FILE, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA foreign_keys = OFF")
-            _ensure_users_columns(cursor)
-            _ensure_hosts_columns(cursor)
-            _ensure_device_tiers_table(cursor)
-            _ensure_plans_columns(cursor)
-            _ensure_support_tickets_columns(cursor)
-            _ensure_support_messages_columns(cursor)
-            _ensure_vpn_keys_schema(cursor)
-            _ensure_table_column(cursor, "vpn_keys", "comment_key", "TEXT")
-            _ensure_table_column(cursor, "vpn_keys", "is_pinned", "BOOLEAN DEFAULT 0")
-            _ensure_ssh_targets_table(cursor)
-            _ensure_host_speedtests_table(cursor)
-            _ensure_resource_metrics_table(cursor)
-            _ensure_gift_tokens_table(cursor)
-            _ensure_promo_tables(cursor)
-            _ensure_webapp_settings_table(cursor)
+
+            # ===== Новый домен создаётся ПЕРВЫМ и независимо от legacy-шагов =====
+            # (при восстановлении старого бэкапа вспомогательные таблицы могут
+            # отсутствовать, и миграция не должна из-за этого откатывать новые)
+            try:
+                _ensure_traffic_tables(cursor)
+                _ensure_fulfillment_tables(cursor)
+                _ensure_backup_snapshot_tables(cursor)
+                _ensure_schema_version(cursor)
+                conn.commit()
+            except sqlite3.Error as e:
+                logging.error("Сбой миграции нового домена: %s", e)
+
+            # Legacy-шаги: каждый шаг в своей транзакции, сбой одного не
+            # откатывает остальные (устаревшие/частичные бэкапы)
+            def _legacy_step(step_name, step_fn):
+                try:
+                    step_fn()
+                except Exception as e:
+                    logging.warning("Миграция: шаг %s пропущен (%s)", step_name, e)
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+
+            _legacy_step("users_columns", lambda: _ensure_users_columns(cursor))
+            _legacy_step("hosts_columns", lambda: _ensure_hosts_columns(cursor))
+            _legacy_step("device_tiers", lambda: _ensure_device_tiers_table(cursor))
+            _legacy_step("plans_columns", lambda: _ensure_plans_columns(cursor))
+            _legacy_step("support_tickets_columns", lambda: _ensure_support_tickets_columns(cursor))
+            _legacy_step("support_messages_columns", lambda: _ensure_support_messages_columns(cursor))
+            _legacy_step("vpn_keys_schema", lambda: _ensure_vpn_keys_schema(cursor))
+            _legacy_step("vpn_keys_comment", lambda: _ensure_table_column(cursor, "vpn_keys", "comment_key", "TEXT"))
+            _legacy_step("vpn_keys_pinned", lambda: _ensure_table_column(cursor, "vpn_keys", "is_pinned", "BOOLEAN DEFAULT 0"))
+            _legacy_step("ssh_targets", lambda: _ensure_ssh_targets_table(cursor))
+            _legacy_step("host_speedtests", lambda: _ensure_host_speedtests_table(cursor))
+            _legacy_step("resource_metrics", lambda: _ensure_resource_metrics_table(cursor))
+            _legacy_step("gift_tokens", lambda: _ensure_gift_tokens_table(cursor))
+            _legacy_step("promo_tables", lambda: _ensure_promo_tables(cursor))
+            _legacy_step("webapp_settings", lambda: _ensure_webapp_settings_table(cursor))
             try:
                 cursor.execute("ALTER TABLE seller_users RENAME COLUMN sellr_ref TO seller_ref")
                 logging.info("Переименована колонка sellr_ref в seller_ref в таблице seller_users")
             except Exception:
                 pass
 
-            _ensure_seller_users_table(cursor)
+            _legacy_step("seller_users", lambda: _ensure_seller_users_table(cursor))
 
             try:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_thread ON support_tickets(forum_chat_id, message_thread_id)")
@@ -1315,14 +1358,8 @@ def run_migration():
                 "auto_start_bot": "0"
             })
             
-            _ensure_pending_transactions_table(cursor)
-            _ensure_default_button_configs(cursor)
-
-            # ===== Новый домен: гибриды, трафик, fulfillment, snapshots (Этап 1) =====
-            _ensure_traffic_tables(cursor)
-            _ensure_fulfillment_tables(cursor)
-            _ensure_backup_snapshot_tables(cursor)
-            _ensure_schema_version(cursor)
+            _legacy_step("pending_transactions", lambda: _ensure_pending_transactions_table(cursor))
+            _legacy_step("button_configs", lambda: _ensure_default_button_configs(cursor))
             
 
             try:

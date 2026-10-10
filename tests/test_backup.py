@@ -1,4 +1,4 @@
-"""Тесты backup snapshots и restore политики (Этап 8 ТЗ)."""
+"""Тесты backup snapshots и restore политики (Этап 8 ТЗ + обновление политики приёма)."""
 from __future__ import annotations
 
 import asyncio
@@ -48,36 +48,141 @@ def test_snapshot_records(test_db):
     assert {r[0] for r in rows} == {1, 2}
 
 
-def test_restore_rejects_incomplete_without_confirm(tmp_path, monkeypatch):
-    """Restore incomplete-архива без явного подтверждения отклоняется."""
-    from shop_bot.data_manager import backup_manager
-
-    # архив с неполным manifest
-    archive = tmp_path / "db-backup-test.zip"
-    db_copy = tmp_path / "users.db"
-    with sqlite3.connect(db_copy) as conn:
-        conn.execute("CREATE TABLE users (telegram_id INTEGER)")
+def _make_legacy_db(db_path: Path):
+    """БД старой версии: core-таблицы есть, schema_version нет, новых таблиц нет."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE users (telegram_id INTEGER, username TEXT)")
+        conn.execute("INSERT INTO users VALUES (111, 'alice')")
+        conn.execute("CREATE TABLE vpn_keys (key_id INTEGER PRIMARY KEY, user_id INTEGER)")
+        conn.execute("CREATE TABLE transactions (transaction_id INTEGER PRIMARY KEY, payment_id TEXT)")
+        conn.execute("CREATE TABLE bot_settings (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("CREATE TABLE xui_hosts (host_name TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE plans (plan_id INTEGER PRIMARY KEY, plan_name TEXT, price REAL)")
+        conn.execute("INSERT INTO plans VALUES (1, 'Old', 100.0)")
         conn.commit()
+
+
+def test_validate_legacy_db_is_accepted_with_warning(tmp_path):
+    """Старая БД валидна со статусом legacy (принимается, не отклоняется)."""
+    from shop_bot.data_manager import backup_manager
+    old_db = tmp_path / "legacy.db"
+    _make_legacy_db(old_db)
+    ok, status, message = backup_manager.validate_db_file(old_db)
+    assert ok is True
+    assert status == "legacy"
+    assert "СТАРОЙ" not in message  # message lowercase для журнала
+    assert "мигрирована" in message or "миграция" in message
+
+
+def test_validate_invalid_db_rejected(tmp_path):
+    """Битый файл (нет core-таблиц) отклоняется."""
+    from shop_bot.data_manager import backup_manager
+    bad_db = tmp_path / "bad.db"
+    with sqlite3.connect(bad_db) as conn:
+        conn.execute("CREATE TABLE foo (x INTEGER)")
+        conn.commit()
+    ok, status, message = backup_manager.validate_db_file(bad_db)
+    assert ok is False
+    assert status == "invalid"
+
+
+def test_restore_legacy_db_accepted_and_migrated(tmp_path, monkeypatch):
+    """Главный сценарий из инцидента: старая БД принимается как основная и мигрируется."""
+    from shop_bot.data_manager import backup_manager, database
+    from shop_bot.data_manager import remnawave_repository as rw_repo
+
+    # рабочая БД проекта во временном каталоге
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(database, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(rw_repo, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "BACKUPS_DIR", work / "backups")
+    database.initialize_db()
+
+    # legacy-бэкап
+    legacy = tmp_path / "uploaded-legacy.db"
+    _make_legacy_db(legacy)
+
+    ok, message = backup_manager.restore_from_file(legacy)
+    assert ok is True, message
+    assert "СТАРОЙ" in message  # предупреждение администратору
+
+    # проверяем: данные пользователей сохранены, миграция создала новые таблицы
+    with sqlite3.connect(work / "users.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] >= 1
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"traffic_purchases", "payment_fulfillment_jobs", "hybrid_subscription_pairs"} <= tables
+        assert conn.execute(
+            "SELECT value FROM bot_settings WHERE key='schema_version'").fetchone()[0] == "2"
+        assert conn.execute("SELECT COUNT(*) FROM plans").fetchone()[0] == 1
+
+
+def test_restore_incomplete_requires_confirm_then_allowed(tmp_path, monkeypatch):
+    """Неполный snapshot: без галочки отказ, с галочкой — принят с предупреждением."""
+    import json as _json
+    from shop_bot.data_manager import backup_manager, database
+    from shop_bot.data_manager import remnawave_repository as rw_repo
+
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(database, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(rw_repo, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "BACKUPS_DIR", work / "backups")
+    database.initialize_db()
+
+    # свежая совместимая копия как «бэкап»
+    db_copy = tmp_path / "bk.db"
+    with sqlite3.connect(work / "users.db") as src, sqlite3.connect(db_copy) as dst:
+        src.backup(dst)
+
+    archive = tmp_path / "db-backup-test.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.write(db_copy, "users.db")
-    manifest = tmp_path / "db-backup-test.manifest.json"
-    manifest.write_text(json.dumps({"snapshot_status": "incomplete"}), encoding="utf-8")
+    (tmp_path / "db-backup-test.manifest.json").write_text(
+        _json.dumps({"snapshot_status": "incomplete"}), encoding="utf-8")
 
-    assert backup_manager.check_backup_snapshot_status(archive) == "incomplete"
-    result = backup_manager.restore_from_file(archive)
-    assert result is False, "incomplete без подтверждения должен быть отклонён"
-    # с явным подтверждением — валидация всё равно не пройдёт (это legacy-дамп), но
-    # причина уже другая: проверяем что allow_incomplete переключает поведение
-    result2 = backup_manager.restore_from_file(archive, allow_incomplete=True)
-    assert result2 is False, "валидация schema version должна отклонить legacy-дамп"
+    # без подтверждения — отказ
+    ok, message = backup_manager.restore_from_file(archive)
+    assert ok is False
+    assert "НЕПОЛНЫЙ" in message
+
+    # с явным подтверждением — принят, с предупреждением в сообщении
+    ok, message = backup_manager.restore_from_file(archive, allow_incomplete=True)
+    assert ok is True
+    assert "неполный" in message.lower()
 
 
-def test_validate_db_rejects_old_schema(tmp_path):
-    from shop_bot.data_manager import backup_manager
-    db_path = tmp_path / "old.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("CREATE TABLE users (telegram_id INTEGER)")
-        conn.execute("CREATE TABLE bot_settings (key TEXT PRIMARY KEY, value TEXT)")
-        conn.execute("INSERT INTO bot_settings VALUES ('schema_version', '1')")
+def test_restore_old_schema_version_only(tmp_path, monkeypatch):
+    """БД с явной старой schema_version=1: тоже принимается и мигрируется."""
+    from shop_bot.data_manager import backup_manager, database
+    from shop_bot.data_manager import remnawave_repository as rw_repo
+
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(database, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(rw_repo, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "DB_FILE", work / "users.db")
+    monkeypatch.setattr(backup_manager, "BACKUPS_DIR", work / "backups")
+    database.initialize_db()
+
+    old_db = tmp_path / "v1.db"
+    with sqlite3.connect(work / "users.db") as src, sqlite3.connect(old_db) as dst:
+        src.backup(dst)
+    with sqlite3.connect(old_db) as conn:
+        conn.execute("UPDATE bot_settings SET value='1' WHERE key='schema_version'")
+        for t in ("traffic_purchases", "payment_fulfillment_jobs", "hybrid_subscription_pairs",
+                  "traffic_purchase_packages", "traffic_carry_balances", "traffic_operations",
+                  "traffic_referral_rewards", "backup_runs", "remnawave_state_snapshots"):
+            conn.execute(f"DROP TABLE IF EXISTS {t}")
         conn.commit()
-    assert backup_manager.validate_db_file(db_path) is False
+
+    ok, status, _ = backup_manager.validate_db_file(old_db)
+    assert ok is True and status == "legacy"
+    ok, message = backup_manager.restore_from_file(old_db)
+    assert ok is True
+    assert "СТАРОЙ" in message
+    with sqlite3.connect(work / "users.db") as conn:
+        assert conn.execute(
+            "SELECT value FROM bot_settings WHERE key='schema_version'").fetchone()[0] == "2"
