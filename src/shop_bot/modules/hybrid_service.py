@@ -149,6 +149,8 @@ async def create_hybrid_subscription(
 
     Возвращает данные primary ключа (payload для record_key) или None при ошибке.
     """
+    logger.info("HYBRID create: host=%s user=%s tg=%s email=%s expire=%s",
+                host_name, user_id, telegram_id, primary_email, expire_at)
     host = tr_repo.get_host_hybrid_settings(host_name)
     if not host:
         logger.error("hybrid_service: хост %s не найден", host_name)
@@ -197,6 +199,8 @@ async def create_hybrid_subscription(
         raise HybridCreationError(f"hybrid creation failed, primary rollback {'ok' if rollback_ok else 'FAILED'}") from exc
 
     # --- успех: записать локальные данные ---
+    logger.info("HYBRID create: primary=%s hybrid=%s — оба созданы, записываем пару",
+                primary_payload.get("id"), hybrid_payload.get("id"))
     key_id = rw_repo.record_key_from_payload(
         user_id=user_id, payload=dict(primary_payload, host_name=host_name, squad_uuid=primary_squad),
         host_name=host_name, description=description, tag=tag,

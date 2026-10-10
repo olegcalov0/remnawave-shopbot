@@ -3301,54 +3301,68 @@ def create_webhook_app(bot_controller_instance):
     @login_required
     def update_host_hybrid_settings_route():
         """Серверная валидация настроек гибрида и докупки (не только HTML)."""
+        import logging as _log
+        _logger = _log.getLogger(__name__)
         from shop_bot.modules.hybrid_service import InvalidSuffixError, validate_suffix
         try:
             host_name = (request.form.get('host_name') or '').strip()
             if not host_name:
+                _logger.warning("update-host-hybrid-settings: пустой host_name")
                 return jsonify({'ok': False, 'error': 'host_name обязателен'}), 400
 
             values: dict = {}
+            # ВСЕ булевы флаги всегда обрабатываются: 1 если в форме, 0 если нет
+            # (невыделенный чекбокс не попадает в FormData — это стандарт HTML)
             for flag in ('hybrid_enabled', 'hybrid_wifi_enabled', 'hybrid_lte_enabled',
                          'traffic_purchase_enabled'):
-                if flag in request.form:
-                    values[flag] = 1 if request.form.get(flag) in ('1', 'on', 'true') else 0
+                values[flag] = 1 if request.form.get(flag) in ('1', 'on', 'true') else 0
             for text_field in ('hybrid_suffix', 'hybrid_squad_uuid'):
-                if text_field in request.form:
-                    values[text_field] = (request.form.get(text_field) or '').strip()
+                values[text_field] = (request.form.get(text_field) or '').strip()
             for name_field in ('wifi_traffic_name', 'lte_traffic_name'):
-                if name_field in request.form:
-                    v = (request.form.get(name_field) or '').strip()
-                    values[name_field] = v or ('WiFi гигабайты' if name_field.startswith('wifi') else 'LTE гигабайты')
+                v = (request.form.get(name_field) or '').strip()
+                values[name_field] = v or ('WiFi гигабайты' if name_field.startswith('wifi') else 'LTE гигабайты')
             for price_field in ('wifi_burnable_price_per_gb', 'wifi_non_burnable_price_per_gb',
                                 'lte_burnable_price_per_gb', 'lte_non_burnable_price_per_gb'):
-                if price_field in request.form:
-                    raw = (request.form.get(price_field) or '').strip()
-                    if raw:
-                        price = float(raw)
-                        if price <= 0:
-                            return jsonify({'ok': False, 'error': f'{price_field} должен быть > 0'}), 400
-                        values[price_field] = price
-                    else:
-                        values[price_field] = None
-            if 'low_traffic_threshold_percent' in request.form:
-                thr = int(request.form.get('low_traffic_threshold_percent') or 10)
-                if not (1 <= thr <= 99):
-                    return jsonify({'ok': False, 'error': 'порог 1-99%'}), 400
-                values['low_traffic_threshold_percent'] = thr
+                raw = (request.form.get(price_field) or '').strip()
+                if raw:
+                    price = float(raw)
+                    if price <= 0:
+                        _logger.warning("update-host-hybrid-settings %s: %s = %s (должен быть > 0)",
+                                        host_name, price_field, price)
+                        return jsonify({'ok': False, 'error': f'{price_field} должен быть > 0'}), 400
+                    values[price_field] = price
+                else:
+                    values[price_field] = None
+            thr = int(request.form.get('low_traffic_threshold_percent') or 10)
+            if not (1 <= thr <= 99):
+                return jsonify({'ok': False, 'error': 'порог 1-99%'}), 400
+            values['low_traffic_threshold_percent'] = thr
 
             # валидация suffix при включённом гибриде
             if int(values.get('hybrid_enabled', 0)) == 1:
                 try:
                     validate_suffix(values.get('hybrid_suffix'))
                 except InvalidSuffixError as exc:
+                    _logger.warning("update-host-hybrid-settings %s: невалидный suffix: %s", host_name, exc)
                     return jsonify({'ok': False, 'error': f'suffix: {exc}'}), 400
                 if not values.get('hybrid_squad_uuid'):
-                    return jsonify({'ok': False, 'error': 'hybrid squad UUID обязателен'}), 400
+                    _logger.warning("update-host-hybrid-settings %s: hybrid squad UUID пустой", host_name)
+                    return jsonify({'ok': False, 'error': 'hybrid squad UUID обязателен при включённом гибриде'}), 400
 
             from shop_bot.data_manager import traffic_repository as tr_repo
             ok = tr_repo.update_host_hybrid_settings(host_name, values)
-            return jsonify({'ok': ok})
+            _logger.info("update-host-hybrid-settings %s: ok=%s, hybrid=%s purchase=%s suffix=%s",
+                         host_name, ok, values.get('hybrid_enabled'),
+                         values.get('traffic_purchase_enabled'),
+                         values.get('hybrid_suffix') or '(пусто)')
+            if not ok:
+                return jsonify({'ok': False, 'error': f'хост «{host_name}» не найден'}), 404
+            return jsonify({'ok': True, 'message': 'Настройки гибрида и докупки сохранены'})
+        except ValueError as e:
+            _logger.error("update-host-hybrid-settings: ValueError: %s", e)
+            return jsonify({'ok': False, 'error': f'неверное значение: {e}'}), 400
         except Exception as e:
+            _logger.error("update-host-hybrid-settings: ошибка: %s", e, exc_info=True)
             return jsonify({'ok': False, 'error': str(e)}), 400
 
     @flask_app.route('/add-traffic-package', methods=['POST'])

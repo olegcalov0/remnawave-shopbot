@@ -578,11 +578,13 @@ async def _maybe_run_daily_traffic_reset():
     now = get_msk_time()
     if _last_traffic_reset_at and (now - _last_traffic_reset_at).total_seconds() < 20 * 3600:
         return
+    logger.info("Scheduler: запуск daily traffic reset + expiry burn")
     from shop_bot.modules import traffic_service
     from shop_bot.data_manager import traffic_repository as tr_repo
     from shop_bot.modules import domain_constants as const
 
     processed = await traffic_service.run_daily_resets()
+    logger.info("Scheduler: daily traffic reset — обработано reset-записей: %s", processed)
     # expiry burn: истёкшие подписки теряют carry
     try:
         keys = rw_repo.get_all_keys() or []

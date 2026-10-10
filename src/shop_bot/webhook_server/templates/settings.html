@@ -2022,9 +2022,10 @@
                                 <h5 class="text-white font-bold text-sm tracking-tight">Гибрид и докупка трафика</h5>
                             </div>
                         </div>
-                        <form id="hybrid-settings-{{ host.host_name }}"
-                              onsubmit="return saveHybridSettings(event, '{{ host.host_name }}')">
+                        <form action="{{ url_for('update_host_hybrid_settings_route') }}" method="post"
+                              id="hybrid-settings-{{ host.host_name }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+                            <input type="hidden" name="host_name" value="{{ host.host_name }}" />
                             <div class="space-y-3">
                                 <div class="flex items-center justify-between">
                                     <div>

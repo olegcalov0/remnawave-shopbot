@@ -166,6 +166,9 @@ def create_purchase_draft(*, payment_id: str, user_id: int, key_id: int, traffic
                           gb_amount: int, non_burnable: bool, source_kind: str,
                           package: dict | None = None, pricing: dict) -> int | None:
     """Атомарное создание purchase со зафиксированной ценой до оплаты."""
+    logger.info("TRAFFIC purchase draft: payment=%s user=%s key=%s type=%s gb=%s burnable=%s price=%s",
+                payment_id, user_id, key_id, traffic_type, gb_amount,
+                "non" if non_burnable else "burn", pricing.get("payable_rub"))
     target = resolve_target(key_id, traffic_type)
     if not target:
         raise TrafficPurchaseError("не найден получатель трафика")
@@ -203,6 +206,7 @@ async def fulfill_traffic_purchase(bot, metadata: dict) -> bool:
     гарантирует единственное применение даже при повторном job/retry.
     """
     payment_id = str(metadata.get("payment_id") or "")
+    logger.info("TRAFFIC fulfill: payment=%s", payment_id)
     purchase = tr_repo.get_traffic_purchase(payment_id)
     if not purchase:
         logger.error("traffic_service: purchase для %s не найден", payment_id)
@@ -264,6 +268,9 @@ async def fulfill_traffic_purchase(bot, metadata: dict) -> bool:
         tr_repo.transition_purchase_status(
             payment_id, (const.PURCHASE_FULFILLING,), const.PURCHASE_FULFILLED,
             extra_sets={"fulfilled_at": uc.now_str()})
+        logger.info("TRAFFIC fulfill: payment=%s OK — +%d GB %s → user %s (new_limit=%d bytes, carry=%s)",
+                     payment_id, gb, traffic_type, purchase["user_id"], new_limit,
+                     "updated" if int(purchase["is_non_burnable"] or 0) else "burnable")
 
         # уведомление пользователя
         try:
@@ -531,7 +538,9 @@ async def perform_reset(key_id: int, role: str, traffic_type: str, reset_date) -
     """
     reset_date_str = reset_date.strftime("%Y-%m-%d") if hasattr(reset_date, "strftime") else str(reset_date)
     idem_key = f"reset:{key_id}:{role}:{reset_date_str}"
+    logger.info("TRAFFIC reset: key=%s role=%s type=%s date=%s", key_id, role, traffic_type, reset_date_str)
     if tr_repo.operation_exists(idem_key):
+        logger.info("TRAFFIC reset: key=%s date=%s — уже выполнен (skip)", key_id, reset_date_str)
         return {"skipped": True, "reason": "already reset"}
 
     target = resolve_target(key_id, traffic_type)

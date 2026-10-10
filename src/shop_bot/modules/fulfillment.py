@@ -35,6 +35,7 @@ def confirm_payment_and_enqueue(provider: str, payment_id: str, metadata: dict |
     операция поставлена в очередь (или уже была поставлена ранее — идемпотентно).
     """
     if not payment_id:
+        logger.warning("FULFILLMENT confirm: пустой payment_id от провайдера %s", provider)
         return False
 
     meta = tr_repo.mark_pending_paid_once(payment_id)
@@ -44,11 +45,18 @@ def confirm_payment_and_enqueue(provider: str, payment_id: str, metadata: dict |
         # ровно один раз через UNIQUE(payment_id)
         meta = metadata or {}
         meta.setdefault("payment_id", payment_id)
+        logger.info("FULFILLMENT confirm: %s payment=%s — нет pending-записи, используем metadata напрямую",
+                    provider, payment_id)
+    else:
+        logger.info("FULFILLMENT confirm: %s payment=%s — pending→paid", provider, payment_id)
 
     action = meta.get("action") or "unknown"
     job_id = tr_repo.upsert_fulfillment_job(payment_id, provider, str(action), meta)
     if job_id is None:
         logger.info("fulfillment: job для %s уже существует (дубль webhook)", payment_id)
+    else:
+        logger.info("FULFILLMENT confirm: %s payment=%s — создан job #%s (action=%s)",
+                    provider, payment_id, job_id, action)
     return True
 
 
@@ -79,6 +87,11 @@ async def _fulfill_only(payload: dict) -> bool:
 async def process_job(bot, job: dict) -> bool:
     """Исполнение одного job: диспетчер по action."""
     from shop_bot.bot import handlers as bot_handlers
+
+    payment_id = job.get("payment_id")
+    logger.info("FULFILLMENT worker: job #%s payment=%s action=%s attempts=%s",
+                job.get("job_id"), payment_id, job.get("action") or "unknown",
+                job.get("attempts"))
 
     payload = {}
     try:
@@ -138,10 +151,15 @@ async def run_fulfillment_worker(bot, *, batch: int = 5) -> int:
     now_iso = uc.now_str()
     # сброс зависших processing (рестарт/падение)
     stale_before = (uc.get_msk_time() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
-    tr_repo.release_stale_jobs(stale_before)
+    released = tr_repo.release_stale_jobs(stale_before)
+    if released:
+        logger.info("FULFILLMENT worker: освобождено зависших jobs: %s", released)
 
     lock_token = secrets.token_hex(8)
     jobs = tr_repo.claim_due_job(lock_token, now_iso, limit=batch)
+    if not jobs:
+        return 0
+    logger.info("FULFILLMENT worker: захвачено jobs: %d", len(jobs))
     processed = 0
     for job in jobs:
         await process_job(bot, job)
