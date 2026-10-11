@@ -2133,6 +2133,48 @@
                             </div>
                         </form>
                         <p class="text-white/30 text-[8px] mt-2">Смена suffix применяется только к новым парам; существующие не переименовываются.</p>
+
+                        <!-- Hybrid Migration Controls -->
+                        <div class="mt-4 border-t border-white/10 pt-4" id="hybrid-migration-block-{{ host.host_name }}">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="material-symbols-outlined text-base text-amber-400">sync_alt</span>
+                                    <span class="text-white/60 text-[10px] font-bold uppercase tracking-wider">Миграция в гибрид</span>
+                                </div>
+                                <span id="migration-status-badge-{{ host.host_name }}"
+                                      class="px-2 py-0.5 rounded-md bg-white/5 text-white/40 text-[9px] font-bold uppercase tracking-wider border border-white/10">
+                                    Статус: —
+                                </span>
+                            </div>
+                            <p class="text-white/30 text-[8px] mb-3">Перевод существующих ключей в гибридный режим. Обрабатывается батчами по 10 ключей, не блокирует работу сервера.</p>
+                            <div class="flex flex-wrap gap-2" id="migration-controls-{{ host.host_name }}">
+                                <button type="button" onclick="startHybridMigration('{{ host.host_name }}')"
+                                        class="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-300 text-[9px] font-bold uppercase tracking-widest hover:bg-emerald-500/20 transition-all border border-emerald-500/20 flex items-center gap-1.5">
+                                    <span class="material-symbols-outlined text-sm">play_arrow</span>
+                                    Запустить
+                                </button>
+                                <button type="button" onclick="pauseHybridMigration('{{ host.host_name }}')"
+                                        class="px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-300 text-[9px] font-bold uppercase tracking-widest hover:bg-amber-500/20 transition-all border border-amber-500/20 flex items-center gap-1.5">
+                                    <span class="material-symbols-outlined text-sm">pause</span>
+                                    Пауза
+                                </button>
+                                <button type="button" onclick="resumeHybridMigration('{{ host.host_name }}')"
+                                        class="px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-300 text-[9px] font-bold uppercase tracking-widest hover:bg-blue-500/20 transition-all border border-blue-500/20 flex items-center gap-1.5">
+                                    <span class="material-symbols-outlined text-sm">fast_forward</span>
+                                    Продолжить
+                                </button>
+                                <button type="button" onclick="refreshMigrationStatus('{{ host.host_name }}')"
+                                        class="px-3 py-1.5 rounded-lg bg-white/5 text-white/50 text-[9px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all border border-white/10 flex items-center gap-1.5">
+                                    <span class="material-symbols-outlined text-sm">refresh</span>
+                                    Обновить
+                                </button>
+                            </div>
+                            <div id="migration-progress-{{ host.host_name }}" class="mt-3 hidden">
+                                <div class="bg-black/20 rounded-lg p-3 border border-white/5 text-[10px] text-white/60 space-y-1">
+                                    <div id="migration-progress-text-{{ host.host_name }}"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Plans -->
@@ -3783,6 +3825,64 @@
         if (r.ok) { showToast('success', 'Пакет удалён'); setTimeout(() => location.reload(), 600); }
         else showToast('danger', r.error || 'Ошибка');
     }
+
+    async function startHybridMigration(hostName) {
+        if (!confirm(`Запустить миграцию существующих ключей хоста «${hostName}» в гибридный режим?`)) return;
+        const fd = new FormData();
+        fd.append('host_name', hostName);
+        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        const r = await sendRequest('/hybrid-migration/start', 'POST', fd);
+        if (r.ok) { showToast('success', 'Миграция запущена'); refreshMigrationStatus(hostName); }
+        else showToast('danger', r.error || 'Ошибка запуска');
+    }
+
+    async function pauseHybridMigration(hostName) {
+        const fd = new FormData();
+        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        const r = await sendRequest('/hybrid-migration/pause', 'POST', fd);
+        if (r.ok) { showToast('warning', 'Миграция приостановлена'); refreshMigrationStatus(hostName); }
+        else showToast('danger', r.error || 'Ошибка');
+    }
+
+    async function resumeHybridMigration(hostName) {
+        const fd = new FormData();
+        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        const r = await sendRequest('/hybrid-migration/resume', 'POST', fd);
+        if (r.ok) { showToast('success', 'Миграция продолжена'); refreshMigrationStatus(hostName); }
+        else showToast('danger', r.error || 'Ошибка');
+    }
+
+    async function refreshMigrationStatus(hostName) {
+        try {
+            const resp = await fetch('/hybrid-migration/status', { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
+            const data = await resp.json();
+            const badge = document.getElementById(`migration-status-badge-${hostName}`);
+            const progressDiv = document.getElementById(`migration-progress-${hostName}`);
+            const progressText = document.getElementById(`migration-progress-text-${hostName}`);
+            if (!data || !data.ok) { if (badge) badge.textContent = 'Статус: ошибка'; return; }
+            const st = data.state || {};
+            const host = st.host;
+            const paused = st.paused;
+            const offset = st.offset || 0;
+            if (!host) {
+                if (badge) { badge.textContent = 'Статус: не активна'; badge.className = 'px-2 py-0.5 rounded-md bg-white/5 text-white/40 text-[9px] font-bold uppercase tracking-wider border border-white/10'; }
+                if (progressDiv) progressDiv.classList.add('hidden');
+            } else if (paused) {
+                if (badge) { badge.textContent = 'Статус: пауза'; badge.className = 'px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 text-[9px] font-bold uppercase tracking-wider border border-amber-500/20'; }
+                if (progressDiv) { progressDiv.classList.remove('hidden'); if (progressText) progressText.innerHTML = `Хост: <b>${host}</b> · обработано: ${offset} ключей`; }
+            } else {
+                if (badge) { badge.textContent = 'Статус: выполняется'; badge.className = 'px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 text-[9px] font-bold uppercase tracking-wider border border-emerald-500/20'; }
+                if (progressDiv) { progressDiv.classList.remove('hidden'); if (progressText) progressText.innerHTML = `Хост: <b>${host}</b> · обработано: ${offset} ключей`; }
+            }
+        } catch (e) { console.error('migration status error:', e); }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('[id^="hybrid-migration-block-"]').forEach(function(el) {
+            const hostName = el.id.replace('hybrid-migration-block-', '');
+            refreshMigrationStatus(hostName);
+        });
+    });
 
 
 

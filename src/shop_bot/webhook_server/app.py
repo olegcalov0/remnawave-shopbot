@@ -947,9 +947,10 @@ def create_webhook_app(bot_controller_instance):
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 25, type=int)
         q = (request.args.get('q') or '').strip()
-        
+        traffic_filter = (request.args.get('filter') or '').strip()
+
         common_data = get_common_template_data()
-        return render_template('users.html', users=[], current_page=page, total_pages=1, q=q, per_page=per_page, **common_data)
+        return render_template('users.html', users=[], current_page=page, total_pages=1, q=q, per_page=per_page, traffic_filter=traffic_filter, **common_data)
 
 
     @flask_app.route('/users/table.partial')
@@ -958,7 +959,10 @@ def create_webhook_app(bot_controller_instance):
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 25, type=int)
         q = (request.args.get('q') or '').strip()
-        users, total = get_users_paginated(page=page, per_page=per_page, q=q or None)
+        traffic_filter = (request.args.get('filter') or '').strip()
+        valid_filters = {'hybrid', 'carry', 'sync_error'}
+        use_filter = traffic_filter if traffic_filter in valid_filters else None
+        users, total = get_users_paginated(page=page, per_page=per_page, q=q or None, traffic_filter=use_filter)
         user_ids = [u['telegram_id'] for u in users]
         try:
             keys_counts = get_keys_counts_for_users(user_ids)
@@ -1017,10 +1021,13 @@ def create_webhook_app(bot_controller_instance):
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 25, type=int)
         q = (request.args.get('q') or '').strip()
-        _, total = get_users_paginated(page=page, per_page=per_page, q=q or None)
+        traffic_filter = (request.args.get('filter') or '').strip()
+        valid_filters = {'hybrid', 'carry', 'sync_error'}
+        use_filter = traffic_filter if traffic_filter in valid_filters else None
+        _, total = get_users_paginated(page=page, per_page=per_page, q=q or None, traffic_filter=use_filter)
         from math import ceil
         total_pages = ceil(total / per_page) if per_page else 1
-        return render_template('partials/users_pagination.html', current_page=page, total_pages=total_pages, q=q)
+        return render_template('partials/users_pagination.html', current_page=page, total_pages=total_pages, q=q, traffic_filter=traffic_filter)
 
     @flask_app.route('/users/<int:user_id>/balance/adjust', methods=['POST'])
     @login_required
@@ -3381,6 +3388,7 @@ def create_webhook_app(bot_controller_instance):
                     return jsonify({'ok': False, 'error': 'hybrid squad UUID обязателен при включённом гибриде'}), 400
 
             from shop_bot.data_manager import traffic_repository as tr_repo
+            old_settings = tr_repo.get_host_hybrid_settings(host_name) or {}
             ok = tr_repo.update_host_hybrid_settings(host_name, values)
             _logger.info("update-host-hybrid-settings %s: ok=%s, hybrid=%s purchase=%s suffix=%s",
                          host_name, ok, values.get('hybrid_enabled'),
@@ -3388,6 +3396,35 @@ def create_webhook_app(bot_controller_instance):
                          values.get('hybrid_suffix') or '(пусто)')
             if not ok:
                 return jsonify({'ok': False, 'error': f'хост «{host_name}» не найден'}), 404
+
+            new_primary_squad = str(old_settings.get('squad_uuid') or '')
+            new_hybrid_squad = str(values.get('hybrid_squad_uuid') or '')
+            old_hybrid_squad = str(old_settings.get('hybrid_squad_uuid') or '')
+            if int(values.get('hybrid_enabled', 0)) == 1 and new_hybrid_squad and new_hybrid_squad != old_hybrid_squad:
+                try:
+                    import asyncio as _asyncio2
+                    from shop_bot.modules import hybrid_service as _hs
+                    pairs = tr_repo.list_pairs_by_status('active', host_name=host_name)
+                    if pairs:
+                        _logger.info("update-host-hybrid-settings %s: запуск move_pair_squads для %d активных пар",
+                                     host_name, len(pairs))
+                        loop = current_app.config.get('EVENT_LOOP')
+                        async def _move_all_squads():
+                            moved = 0
+                            for p in pairs:
+                                try:
+                                    await _hs.move_pair_squads(p, new_primary_squad, new_hybrid_squad)
+                                    moved += 1
+                                except Exception as exc:
+                                    _logger.error("move_pair_squads pair %s: %s", p.get('pair_id'), exc)
+                            _logger.info("move_pair_squads %s: перемещено %d/%d пар", host_name, moved, len(pairs))
+                        if loop and loop.is_running():
+                            _asyncio2.run_coroutine_threadsafe(_move_all_squads(), loop)
+                        else:
+                            _asyncio2.run(_move_all_squads())
+                except Exception as exc:
+                    _logger.error("update-host-hybrid-settings %s: move_pair_squads error: %s", host_name, exc)
+
             return jsonify({'ok': True, 'message': 'Настройки гибрида и докупки сохранены'})
         except ValueError as e:
             _logger.error("update-host-hybrid-settings: ValueError: %s", e)

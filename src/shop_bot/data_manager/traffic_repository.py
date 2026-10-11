@@ -268,6 +268,18 @@ def list_active_pairs(host_name: str | None = None) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_pairs_by_status(status: str, host_name: str | None = None) -> list[dict]:
+    """Найти пары по статусу (например, repair_required) для автоматической обработки."""
+    query = "SELECT * FROM hybrid_subscription_pairs WHERE status = ?"
+    params: list[Any] = [status]
+    if host_name:
+        query += " AND host_name = ?"
+        params.append(host_name)
+    with _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
 # =====================================================================
 # Carry balances
 # =====================================================================

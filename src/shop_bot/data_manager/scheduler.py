@@ -37,6 +37,8 @@ _last_resource_collect_at: datetime | None = None
 _last_resource_alert_at: dict[tuple[str, str, str], datetime] = {}
 _last_traffic_reset_at: datetime | None = None
 _last_low_traffic_notify_at: datetime | None = None
+_last_hybrid_migration_at: datetime | None = None
+_last_pair_repair_at: datetime | None = None
 
 def format_time_left(hours: int) -> str:
     if hours >= 24:
@@ -546,6 +548,16 @@ async def periodic_subscription_check(bot_controller: BotController):
             except Exception as e:
                 logger.error(f"Scheduler: Ошибка low-traffic notifications: {e}", exc_info=True)
 
+            try:
+                await _maybe_run_hybrid_migration_batch()
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка hybrid migration batch: {e}", exc_info=True)
+
+            try:
+                await _maybe_run_pair_repair()
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка pair repair worker: {e}", exc_info=True)
+
             await _maybe_run_periodic_speedtests()
 
 
@@ -675,6 +687,70 @@ async def _maybe_run_low_traffic_notifications(bot_controller):
                         pass
         except Exception as e:
             logger.debug(f"Scheduler: low-traffic notify ошибка для key {key.get('key_id')}: {e}")
+
+
+async def _maybe_run_hybrid_migration_batch():
+    """Обработка гибридной миграции: батчи по BATCH_SIZE ключей за проход (Этап 9 ТЗ).
+
+    state хранится в bot_settings; если миграция активна (host задан, paused=False),
+    scheduler вызывает run_migration_batch() на каждом тике (раз в CHECK_INTERVAL_SECONDS).
+    """
+    global _last_hybrid_migration_at
+    now = get_msk_time()
+    if _last_hybrid_migration_at and (now - _last_hybrid_migration_at).total_seconds() < CHECK_INTERVAL_SECONDS:
+        return
+    _last_hybrid_migration_at = now
+
+    from shop_bot.modules import hybrid_migration
+    state = hybrid_migration.get_migration_state()
+    if not state.get("host") or state.get("paused"):
+        return
+
+    logger.info("Scheduler: запуск hybrid migration batch (host=%s, offset=%s)",
+                state.get("host"), state.get("offset"))
+    result = await hybrid_migration.run_migration_batch()
+    logger.info("Scheduler: hybrid migration batch — %s", result)
+
+    if result.get("done"):
+        logger.info("Scheduler: hybrid migration завершена для host=%s", state.get("host"))
+
+
+async def _maybe_run_pair_repair():
+    """Автоматический repair гибридных пар в статусе repair_required (Этап 8 ТЗ).
+
+    Раз в ~10 минут находит пары со статусом repair_required и пытается
+    восстановить отсутствующую сторону через hybrid_service.repair_pair().
+    При неудаче — пара остаётся в repair_required, логируется ошибка.
+    """
+    global _last_pair_repair_at
+    now = get_msk_time()
+    if _last_pair_repair_at and (now - _last_pair_repair_at).total_seconds() < 600:
+        return
+    _last_pair_repair_at = now
+
+    from shop_bot.modules import hybrid_service
+    from shop_bot.data_manager import traffic_repository as tr_repo
+    from shop_bot.modules import domain_constants as const
+
+    try:
+        pairs = tr_repo.list_pairs_by_status(const.PAIR_REPAIR_REQUIRED)
+    except Exception as e:
+        logger.debug("Scheduler: pair repair — не удалось получить repair_required пары: %s", e)
+        return
+    if not pairs:
+        return
+
+    logger.info("Scheduler: pair repair — найдено %d пар в статусе repair_required", len(pairs))
+    for pair in pairs:
+        try:
+            ok = await hybrid_service.repair_pair(pair)
+            if ok:
+                logger.info("Scheduler: pair repair — пара %s восстановлена", pair.get("pair_id"))
+            else:
+                logger.warning("Scheduler: pair repair — пара %s не восстановлена, остаётся в repair_required",
+                               pair.get("pair_id"))
+        except Exception as exc:
+            logger.error("Scheduler: pair repair — ошибка для пары %s: %s", pair.get("pair_id"), exc)
 
 
 async def _maybe_run_periodic_speedtests():

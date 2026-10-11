@@ -1,18 +1,19 @@
 {% set cp = current_page or 1 %}
 {% set tp = total_pages or 1 %}
 {% set query = q or '' %}
+{% set fval = traffic_filter or '' %}
 {% set ns = namespace(last_m=1, last_d=1) %}
 {% if tp > 1 %}
 <div class="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10 shadow-lg backdrop-blur-sm">
     {% if cp > 1 %}
     <a class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-white/50 hover:text-white transition-all transform hover:-translate-x-0.5 ajax-nav"
-        href="{{ url_for('users_page', page=cp-1, q=query) }}" title="Назад">
+        href="{{ url_for('users_page', page=cp-1, q=query, filter=fval) }}" title="Назад">
         <span class="material-symbols-outlined text-sm">chevron_left</span>
     </a>
     {% endif %}
 
     <a class="w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold transition-all {% if 1 == cp %}bg-primary text-background-dark shadow-lg shadow-primary/20 scale-105{% else %}text-white/50 hover:text-white hover:bg-white/10{% endif %} ajax-nav"
-        href="{{ url_for('users_page', page=1, q=query) }}">1</a>
+        href="{{ url_for('users_page', page=1, q=query, filter=fval) }}">1</a>
 
     {% for p in range(2, tp + 1) %}
     {% set diff = (p - cp)|abs %}
@@ -31,7 +32,7 @@
             {% endif %}
 
             <a class="w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold transition-all {% if p == cp %}bg-primary text-background-dark shadow-lg shadow-primary/20 scale-105{% else %}text-white/50 hover:text-white hover:bg-white/10{% endif %} {% if not is_m %}hidden md:flex{% endif %} ajax-nav"
-                href="{{ url_for('users_page', page=p, q=query) }}">{{ p }}</a>
+                href="{{ url_for('users_page', page=p, q=query, filter=fval) }}">{{ p }}</a>
 
             {% if is_m %}{% set ns.last_m = p %}{% endif %}
             {% if is_d %}{% set ns.last_d = p %}{% endif %}
@@ -40,7 +41,7 @@
 
             {% if cp < tp %} <a
                 class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-white/50 hover:text-white transition-all transform hover:translate-x-0.5 ajax-nav"
-                href="{{ url_for('users_page', page=cp+1, q=query) }}" title="Вперед">
+                href="{{ url_for('users_page', page=cp+1, q=query, filter=fval) }}" title="Вперед">
                 <span class="material-symbols-outlined text-sm">chevron_right</span>
                 </a>
                 {% endif %}

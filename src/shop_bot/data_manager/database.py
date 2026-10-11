@@ -4276,40 +4276,61 @@ def get_all_users() -> list[dict]:
 
 
 # ===== GET_USERS_PAGINATED =====
-def get_users_paginated(page: int = 1, per_page: int = 30, q: str | None = None) -> tuple[list[dict], int]:
+def get_users_paginated(page: int = 1, per_page: int = 30, q: str | None = None,
+                        traffic_filter: str | None = None) -> tuple[list[dict], int]:
     """Вернуть пользователей постранично и общее количество (с учётом фильтра).
 
     Фильтр q ищет по username (LIKE) и по текстовому представлению telegram_id.
+    traffic_filter: 'hybrid' | 'carry' | 'sync_error' — фильтрация по новому домену.
     """
     page = max(1, int(page or 1))
     per_page = max(1, int(per_page or 30))
     offset = (page - 1) * per_page
-    
+
+    filter_join = ""
+    filter_where = ""
+    if traffic_filter == 'hybrid':
+        filter_join = "INNER JOIN hybrid_subscription_pairs hsp ON hsp.user_id = users.telegram_id"
+        filter_where = " AND hsp.status != 'deleted'"
+    elif traffic_filter == 'carry':
+        filter_join = "INNER JOIN traffic_carry_balances tcb ON tcb.key_id IN (SELECT key_id FROM vpn_keys WHERE vpn_keys.user_id = users.telegram_id)"
+        filter_where = " AND tcb.remaining_gb > 0"
+    elif traffic_filter == 'sync_error':
+        filter_join = "INNER JOIN hybrid_subscription_pairs hsp ON hsp.user_id = users.telegram_id"
+        filter_where = " AND hsp.last_sync_status != 'ok' AND hsp.status != 'deleted'"
+
     if q:
         q_like = f"%{q.strip()}%"
-        
-        count_query = """
-            SELECT COUNT(*)
+
+        count_query = f"""
+            SELECT COUNT(DISTINCT users.telegram_id)
             FROM users
-            WHERE (username LIKE ?)
-               OR (CAST(telegram_id AS TEXT) LIKE ?)
+            {filter_join}
+            WHERE ((username LIKE ?)
+               OR (CAST(telegram_id AS TEXT) LIKE ?)){filter_where}
         """
         total = _fetch_val(count_query, (q_like, q_like), 0, "Не удалось подсчитать пользователей с фильтром") or 0
 
-        data_query = """
-            SELECT *
+        data_query = f"""
+            SELECT DISTINCT users.*
             FROM users
-            WHERE (username LIKE ?)
-               OR (CAST(telegram_id AS TEXT) LIKE ?)
+            {filter_join}
+            WHERE ((username LIKE ?)
+               OR (CAST(telegram_id AS TEXT) LIKE ?)){filter_where}
             ORDER BY is_pinned DESC, registration_date DESC
             LIMIT ? OFFSET ?
         """
         users = _fetch_list(data_query, (q_like, q_like, per_page, offset), "Не удалось получить страницу пользователей с фильтром")
     else:
-        total = _fetch_val("SELECT COUNT(*) FROM users", (), 0, "Не удалось подсчитать пользователей") or 0
-        
-        data_query = "SELECT * FROM users ORDER BY is_pinned DESC, registration_date DESC LIMIT ? OFFSET ?"
-        users = _fetch_list(data_query, (per_page, offset), "Не удалось получить страницу пользователей")
+        if filter_join:
+            count_query = f"SELECT COUNT(DISTINCT users.telegram_id) FROM users {filter_join} WHERE 1=1{filter_where}"
+            data_query = f"SELECT DISTINCT users.* FROM users {filter_join} WHERE 1=1{filter_where} ORDER BY is_pinned DESC, registration_date DESC LIMIT ? OFFSET ?"
+            total = _fetch_val(count_query, (), 0, "Не удалось подсчитать пользователей") or 0
+            users = _fetch_list(data_query, (per_page, offset), "Не удалось получить страницу пользователей")
+        else:
+            total = _fetch_val("SELECT COUNT(*) FROM users", (), 0, "Не удалось подсчитать пользователей") or 0
+            data_query = "SELECT * FROM users ORDER BY is_pinned DESC, registration_date DESC LIMIT ? OFFSET ?"
+            users = _fetch_list(data_query, (per_page, offset), "Не удалось получить страницу пользователей")
 
     return users, total
 

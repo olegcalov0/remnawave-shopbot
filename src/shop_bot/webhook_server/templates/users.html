@@ -26,6 +26,26 @@
     </div>
 </div>
 
+<!-- Traffic domain filter buttons -->
+<div class="mb-4 flex flex-wrap gap-2" id="traffic-filters">
+    <button type="button" data-traffic-filter=""
+        class="traffic-filter-btn px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border {{ 'bg-primary/20 text-primary border-primary/30' if not traffic_filter else 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10' }}">
+        Все
+    </button>
+    <button type="button" data-traffic-filter="hybrid"
+        class="traffic-filter-btn px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border {{ 'bg-violet-500/20 text-violet-300 border-violet-500/30' if traffic_filter == 'hybrid' else 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10' }}">
+        <span class="material-symbols-outlined text-sm align-middle mr-0.5">link</span>Гибридные
+    </button>
+    <button type="button" data-traffic-filter="carry"
+        class="traffic-filter-btn px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border {{ 'bg-blue-500/20 text-blue-300 border-blue-500/30' if traffic_filter == 'carry' else 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10' }}">
+        <span class="material-symbols-outlined text-sm align-middle mr-0.5">save</span>Есть перенос
+    </button>
+    <button type="button" data-traffic-filter="sync_error"
+        class="traffic-filter-btn px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border {{ 'bg-amber-500/20 text-amber-300 border-amber-500/30' if traffic_filter == 'sync_error' else 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10' }}">
+        <span class="material-symbols-outlined text-sm align-middle mr-0.5">sync_problem</span>Ошибка синхр.
+    </button>
+</div>
+
 </style>
 
 <div class="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-xl backdrop-blur-md">
@@ -45,7 +65,7 @@
                 </tr>
             </thead>
             <tbody id="users-tbody" class="divide-y divide-white/5"
-                data-fetch-url="{{ url_for('users_table_partial', page=current_page, per_page=per_page, q=q) }}"
+                data-fetch-url="{{ url_for('users_table_partial', page=current_page, per_page=per_page, q=q, filter=traffic_filter or '') }}"
                 data-fetch-interval="120000">
                 <tr>
                     <td colspan="6" class="p-8 text-center">
@@ -61,7 +81,7 @@
 </div>
 
 <div class="flex justify-center mt-6 gap-2" id="users-pagination"
-    data-src="{{ url_for('users_pagination_partial', page=current_page, q=q, per_page=per_page) }}">
+    data-src="{{ url_for('users_pagination_partial', page=current_page, q=q, per_page=per_page, filter=traffic_filter or '') }}">
     {% include 'partials/users_pagination.html' %}
 </div>
 
@@ -375,12 +395,54 @@
                                                 <span
                                                     class="material-symbols-outlined text-[13px] opacity-30">calendar_today</span>
                                                 <span id="udm-registration" class="font-mono pt-px"></span>
-                                            </div>
-                                        </div>
+                        </div>
+                    </div>
+
+                    <div id="udm-panel-traffic" class="udm-tab-panel hidden">
+                        <div class="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-inner group">
+                            <div class="p-5 border-b border-white/10 flex justify-between items-center gap-4 flex-wrap">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-400">
+                                        <span class="material-symbols-outlined text-xl">network_check</span>
+                                    </div>
+                                    <div>
+                                        <h4 class="text-white font-bold text-sm uppercase tracking-wide">Трафик и гибрид</h4>
+                                        <p class="text-white/40 text-[10px] font-medium">Пары, покупки ГБ,carry-балансы</p>
                                     </div>
                                 </div>
                             </div>
+                            <div class="p-4 space-y-4">
+                                <div id="udm-hybrid-pairs-section" class="hidden">
+                                    <div class="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-2">Гибридные пары</div>
+                                    <div id="udm-hybrid-pairs-list" class="space-y-2"></div>
+                                </div>
+                                <div id="udm-traffic-history-section" class="hidden">
+                                    <div class="text-[10px] font-bold uppercase tracking-widest text-white/40 mb-2">История покупок трафика</div>
+                                    <div class="overflow-x-auto max-h-[400px] overflow-y-auto">
+                                        <table class="w-full text-sm">
+                                            <thead class="bg-black/20 border-b border-white/5 sticky top-0 backdrop-blur-md">
+                                                <tr>
+                                                    <th class="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/40 text-left">Дата</th>
+                                                    <th class="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/40 text-left">Тип</th>
+                                                    <th class="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/40 text-left">ГБ</th>
+                                                    <th class="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/40 text-left">Цена</th>
+                                                    <th class="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-white/40 text-left">Статус</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="udm-traffic-history" class="divide-y divide-white/5"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div id="udm-traffic-empty" class="text-center py-8 text-white/30 text-xs uppercase tracking-widest">
+                                    Нет данных о трафике
+                                </div>
+                            </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
                         <!-- Finance Grid -->
                         <div class="grid grid-cols-2 gap-4">
@@ -737,6 +799,22 @@
                                 <span id="udm-tab-count-balance" class="rounded-lg bg-white/5 px-2.5 py-1 text-[10px] font-black text-white/60">0</span>
                             </div>
                         </button>
+                        <button type="button" data-udm-tab="traffic"
+                            class="udm-tab-btn group rounded-xl border border-white/10 bg-transparent px-4 py-3 text-left transition-all hover:bg-white/10 hover:border-white/20"
+                            aria-selected="false">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center border border-violet-500/20">
+                                        <span class="material-symbols-outlined text-lg">network_check</span>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] font-bold uppercase tracking-wider text-white">Трафик</div>
+                                        <div class="text-[10px] text-white/35">Гибрид, ГБ, покупки</div>
+                                    </div>
+                                </div>
+                                <span id="udm-tab-count-traffic" class="rounded-lg bg-white/5 px-2.5 py-1 text-[10px] font-black text-white/60">0</span>
+                            </div>
+                        </button>
                     </div>
                 </div>
 
@@ -909,8 +987,41 @@
         const tbody = document.getElementById('users-tbody');
         if (!input || !table || !tbody) return;
 
+        document.querySelectorAll('.traffic-filter-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const filterVal = btn.getAttribute('data-traffic-filter') || '';
+                const url = new URL(tbody.getAttribute('data-fetch-url'), location.origin);
+                url.searchParams.set('filter', filterVal);
+                url.searchParams.set('page', '1');
+                try {
+                    const resp = await fetch(url, { headers: { 'Accept': 'text/html' }, credentials: 'same-origin' });
+                    if (resp.ok) {
+                        tbody.innerHTML = await resp.text();
+                        tbody.setAttribute('data-fetch-url', url.toString());
+                        const pagEl = document.getElementById('users-pagination');
+                        if (pagEl) {
+                            const pagUrl = new URL(pagEl.getAttribute('data-src'), location.origin);
+                            pagUrl.searchParams.set('filter', filterVal);
+                            pagUrl.searchParams.set('page', '1');
+                            pagEl.setAttribute('data-src', pagUrl.toString());
+                            const pResp = await fetch(pagUrl, { headers: { 'Accept': 'text/html' }, credentials: 'same-origin' });
+                            if (pResp.ok) pagEl.innerHTML = await pResp.text();
+                        }
+                        const newUrl = new URL(location.href);
+                        if (filterVal) newUrl.searchParams.set('filter', filterVal);
+                        else newUrl.searchParams.delete('filter');
+                        newUrl.searchParams.set('page', '1');
+                        history.pushState(null, '', newUrl);
+                        document.querySelectorAll('.traffic-filter-btn').forEach(b => {
+                            b.className = b.className.replace(/bg-[a-z]+-500\/20 text-[a-z]+-300 border-[a-z]+-500\/30/, 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10');
+                        });
+                    }
+                } catch (e) { console.error('filter error:', e); }
+            });
+        });
+
         function setUserDetailsTab(tabName) {
-            const tabs = ['subscriptions', 'payments', 'balance'];
+            const tabs = ['subscriptions', 'payments', 'balance', 'traffic'];
             tabs.forEach((tab) => {
                 const panel = document.getElementById(`udm-panel-${tab}`);
                 const button = document.querySelector(`[data-udm-tab="${tab}"]`);
@@ -1767,6 +1878,91 @@
                     balanceHistory.innerHTML = data.balance_history?.length
                         ? data.balance_history.map(tx => renderTxRow(tx, true)).join('')
                         : emptyHistoryRow;
+
+                    const hybridPairs = data.hybrid_pairs || [];
+                    const trafficHistory = data.traffic_history || [];
+                    const trafficCount = hybridPairs.length + trafficHistory.length;
+                    document.getElementById('udm-tab-count-traffic').textContent = String(trafficCount);
+
+                    const pairsSection = document.getElementById('udm-hybrid-pairs-section');
+                    const pairsList = document.getElementById('udm-hybrid-pairs-list');
+                    const trafficSection = document.getElementById('udm-traffic-history-section');
+                    const trafficHistoryTbody = document.getElementById('udm-traffic-history');
+                    const trafficEmpty = document.getElementById('udm-traffic-empty');
+
+                    if (hybridPairs.length) {
+                        pairsSection.classList.remove('hidden');
+                        const statusColors = {
+                            'active': 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+                            'repair_required': 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                            'broken': 'text-red-400 bg-red-500/10 border-red-500/20',
+                            'detached': 'text-white/40 bg-white/5 border-white/10',
+                            'deleted': 'text-red-500 bg-red-500/10 border-red-500/20',
+                        };
+                        const statusLabels = {
+                            'active': 'Активна', 'repair_required': 'Требует ремонта',
+                            'broken': 'Сломана', 'detached': 'Отвязана', 'deleted': 'Удалена',
+                        };
+                        pairsList.innerHTML = hybridPairs.map(p => {
+                            const st = p.status || 'active';
+                            const stCls = statusColors[st] || statusColors['detached'];
+                            const stLabel = statusLabels[st] || st;
+                            const syncOk = p.last_sync_status === 'ok';
+                            return `
+                            <div class="bg-black/20 border border-white/5 rounded-xl p-3 flex items-center justify-between gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <span class="material-symbols-outlined text-base ${st === 'active' ? 'text-emerald-400' : 'text-amber-400'}">${st === 'active' ? 'link' : 'link_off'}</span>
+                                    <div class="min-w-0">
+                                        <div class="text-white/70 text-xs font-mono truncate">#${p.key_id} · ${escapeHtml(p.host_name || '')}</div>
+                                        <div class="text-white/40 text-[10px] truncate">${escapeHtml(p.hybrid_username || '')}</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    ${syncOk ? '' : `<span class="text-amber-400 text-[10px]" title="${escapeHtml(p.last_sync_error || '')}">⚠ sync</span>`}
+                                    <span class="px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider ${stCls}">${stLabel}</span>
+                                </div>
+                            </div>`;
+                        }).join('');
+                    } else {
+                        pairsSection.classList.add('hidden');
+                    }
+
+                    if (trafficHistory.length) {
+                        trafficSection.classList.remove('hidden');
+                        trafficEmpty.classList.add('hidden');
+                        trafficHistoryTbody.innerHTML = trafficHistory.map(p => {
+                            const typeLabel = p.traffic_type === 'lte' ? 'LTE' : 'WiFi';
+                            const burnLabel = p.is_non_burnable ? 'несгораемый' : 'сгораемый';
+                            const stLabels = {
+                                'created': 'Создан', 'payment_pending': 'Ожидает оплаты', 'paid': 'Оплачен',
+                                'fulfilling': 'Выдаётся', 'fulfilled': 'Выдан', 'retryable_failure': 'Повтор',
+                                'manual_review': 'Ручная проверка', 'cancelled': 'Отменён',
+                            };
+                            const stLabel = stLabels[p.status] || p.status || '';
+                            const stColors = {
+                                'fulfilled': 'text-emerald-400', 'cancelled': 'text-red-400',
+                                'manual_review': 'text-amber-400', 'retryable_failure': 'text-amber-400',
+                                'paid': 'text-blue-400', 'fulfilling': 'text-blue-400',
+                            };
+                            const stCls = stColors[p.status] || 'text-white/60';
+                            const dateStr = (p.created_at || '').split('T')[0] || '';
+                            return `
+                            <tr class="hover:bg-white/5">
+                                <td class="px-4 py-2 text-white/50 text-xs">${dateStr}</td>
+                                <td class="px-4 py-2 text-white/70 text-xs">${typeLabel} · ${burnLabel}</td>
+                                <td class="px-4 py-2 text-white font-bold text-xs">${p.gb_amount || 0} ГБ</td>
+                                <td class="px-4 py-2 text-white/70 text-xs">${(parseFloat(p.total_price_rub) || 0).toFixed(0)} ₽</td>
+                                <td class="px-4 py-2 ${stCls} text-xs font-bold">${stLabel}${p.last_sync_error ? ' ⚠' : ''}</td>
+                            </tr>`;
+                        }).join('');
+                    } else {
+                        trafficSection.classList.add('hidden');
+                    }
+                    if (trafficCount === 0) {
+                        trafficEmpty.classList.remove('hidden');
+                    } else {
+                        trafficEmpty.classList.add('hidden');
+                    }
 
                     setUserDetailsTab('subscriptions');
                     document.getElementById('udm-loading').classList.add('hidden');
