@@ -258,6 +258,24 @@ async def sync_keys_with_panels():
                     expiry_date = None
 
             if expiry_date and expiry_date < now - timedelta(days=5):
+                # Идентификация перед удалением: панельный telegramId должен
+                # совпадать с владельцем ключа, иначе удаляем не тот аккаунт.
+                _remote_tg = (remote_user or {}).get('telegramId') if remote_user else None
+                _owner = db_key.get('user_id')
+                if _remote_tg not in (None, '', 'None', 0) and _owner and str(_remote_tg) != str(_owner):
+                    logger.error(
+                        "IDENTITY MISMATCH (scheduler delete): key %s owner=%s panel telegramId=%s — "
+                        "автоудаление пропущено, панельный аккаунт не тронут",
+                        db_key.get('key_id'), _owner, _remote_tg)
+                    try:
+                        tr_repo.record_traffic_operation(
+                            idempotency_key=f"identity_mismatch_delete:{db_key.get('key_id')}:{datetime.now().strftime('%Y-%m-%d')}",
+                            operation_type='manual_adjustment', key_id=db_key.get('key_id') or 0,
+                            actor_type='automation', result='failed',
+                            error_text=f"panel telegramId={_remote_tg} != owner {_owner}; delete skipped")
+                    except Exception:
+                        pass
+                    continue
                 # гибридные пары: не удалять primary автоматически — repair job (Этап 2 ТЗ)
                 pair_for_key = tr_repo.get_pair_by_primary_key(db_key.get('key_id') or 0)
                 if pair_for_key and pair_for_key.get('status') in ('active', 'repair_required'):

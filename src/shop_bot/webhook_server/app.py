@@ -92,7 +92,7 @@ ALL_SETTINGS_KEYS = [
     "telegram_bot_username", "admin_telegram_id", "yookassa_shop_id",
     "yookassa_secret_key", "sbp_enabled", "receipt_email", "cryptobot_token",
     "heleket_merchant_id", "heleket_api_key", "domain", "referral_percentage",
-    "referral_discount", "ton_wallet_address", "tonapi_key", "force_subscription", "trial_enabled", "trial_duration_days", "trial_host_id", "trial_internal_squad_uuid", "trial_traffic_limit_gb", "trial_hwid_limit", "enable_referrals", "minimum_withdrawal",
+    "referral_discount", "ton_wallet_address", "tonapi_key", "force_subscription", "trial_enabled", "trial_duration_days", "trial_host_id", "trial_internal_squad_uuid", "trial_traffic_limit_gb", "trial_hwid_limit", "trial_hybrid_traffic_limit_gb", "trial_hybrid_hwid_limit", "enable_referrals", "minimum_withdrawal",
 
     "enable_fixed_referral_bonus", "fixed_referral_bonus_amount",
 
@@ -2063,6 +2063,38 @@ def create_webhook_app(bot_controller_instance):
             if key:
                 from shop_bot.data_manager import traffic_repository as tr_repo
                 from shop_bot.modules import hybrid_service
+
+                # Идентификация перед удалением из панели: сверка telegramId
+                # панельного пользователя с владельцем ключа в БД.
+                _owner = key.get('user_id')
+                _panel_tg = None
+                try:
+                    _panel_user = asyncio.run(remnawave_api.get_user_by_id(
+                        key.get('remnawave_user_uuid'), host_name=key.get('host_name')))
+                    _panel_tg = (_panel_user or {}).get('telegramId')
+                except Exception as e:
+                    logger.warning("Админка delete_key: не удалось прочитать telegramId для key %s: %s", key_id, e)
+                if _panel_tg not in (None, '', 'None', 0) and _owner and str(_panel_tg) != str(_owner):
+                    logger.error(
+                        "IDENTITY MISMATCH (admin delete): key %s owner=%s panel telegramId=%s — "
+                        "удаление из панели НЕ выполнено",
+                        key_id, _owner, _panel_tg)
+                    try:
+                        tr_repo.record_traffic_operation(
+                            idempotency_key=f"identity_mismatch_admin_delete:{key_id}:{datetime.now().strftime('%Y-%m-%d')}",
+                            operation_type='manual_adjustment', key_id=key_id,
+                            actor_type='admin', result='failed',
+                            error_text=f"panel telegramId={_panel_tg} != owner {_owner}; panel delete skipped")
+                    except Exception:
+                        pass
+                    flash('⚠️ Рассинхрон идентификации: панельный telegramId не совпадает с владельцем. '
+                          'Пользователь в панели НЕ удалён (защита от удаления чужого аккаунта). Ключ удалён только из БД бота.',
+                          'danger')
+                    ok = delete_key_by_id(key_id)
+                    if not ok:
+                        flash('Не удалось удалить ключ из БД.', 'danger')
+                    return redirect(request.referrer or url_for('admin_keys_page'))
+
                 pair = tr_repo.get_pair_by_primary_key(key_id)
                 try:
                     # Если ключ гибридный — удаляем обоих пользователей из Remnawave

@@ -393,6 +393,43 @@ async def get_user_by_id(user_id: int | str, *, host_name: str | None = None) ->
 get_user_by_uuid = get_user_by_id
 
 
+def _panel_telegram_id_matches(payload: dict[str, Any] | None, expected_telegram_id: int | str | None) -> bool:
+    """Проверить, что панель вернула telegramId, совпадающий с ожидаемым.
+
+    Если у панели/пользователя telegramId отсутствует (None/пусто) — проверка
+    считается пройденной (панель может не хранить это поле), лог не пишется.
+    Если присутствует и отличается — это рассинхрон идентификации: False.
+    """
+    if payload is None or expected_telegram_id in (None, '', 'None'):
+        return True
+    try:
+        expected = int(expected_telegram_id)
+    except (TypeError, ValueError):
+        return True
+    remote_tg = (payload or {}).get('telegramId')
+    if remote_tg in (None, '', 'None', 0):
+        return True
+    try:
+        return int(remote_tg) == expected
+    except (TypeError, ValueError):
+        return False
+
+
+def _panel_telegram_id_problems(payload: dict[str, Any] | None, expected_telegram_id: int | str | None) -> str | None:
+    """Строковое описание проблемы telegramId (для логов/audit) или None."""
+    if payload is None or expected_telegram_id in (None, '', 'None'):
+        return None
+    remote_tg = (payload or {}).get('telegramId')
+    if remote_tg in (None, '', 'None', 0):
+        return None
+    try:
+        if int(remote_tg) != int(expected_telegram_id):
+            return f"telegramId mismatch: expected={expected_telegram_id} remote={remote_tg}"
+    except (TypeError, ValueError):
+        return f"telegramId unparseable: remote={remote_tg} expected={expected_telegram_id}"
+    return None
+
+
 async def get_connected_devices_count(user_id: int | str, *, host_name: str | None = None) -> dict[str, Any] | None:
     resolved_id = await _resolve_user_id(user_id, host_name=host_name)
     if resolved_id is None:
@@ -736,6 +773,51 @@ def extract_subscription_url(user_payload: dict[str, Any] | None) -> str | None:
     return user_payload.get("subscriptionUrl")
 
 
+async def find_panel_user_by_telegram_id(host_name: str, telegram_id: int | str) -> dict[str, Any] | None:
+    """Найти панельного пользователя по telegramId (поиск по всем squad'ам хоста).
+
+    Возвращает payload пользователя или None, если не найден.
+    """
+    try:
+        expected = int(telegram_id)
+    except (TypeError, ValueError):
+        return None
+    from shop_bot.data_manager import remnawave_repository as _rw
+    squads: list[str] = []
+    try:
+        host = _rw.get_host(host_name) or {}
+        for key in ('squad_uuid', 'internal_squad_uuid', 'hybrid_squad_uuid'):
+            val = (host.get(key) or '').strip()
+            if val and val not in squads:
+                squads.append(val)
+    except Exception:
+        pass
+    if not squads:
+        try:
+            users = await list_users(host_name, squad_uuid=None, size=1000)
+        except Exception:
+            return None
+        for u in users or []:
+            try:
+                if u.get('telegramId') is not None and int(u.get('telegramId')) == expected:
+                    return u
+            except (TypeError, ValueError):
+                continue
+        return None
+    for sq in squads:
+        try:
+            users = await list_users(host_name, squad_uuid=sq, size=1000)
+        except Exception:
+            continue
+        for u in users or []:
+            try:
+                if u.get('telegramId') is not None and int(u.get('telegramId')) == expected:
+                    return u
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 
 
 async def create_or_update_key_on_host(
@@ -861,6 +943,7 @@ async def create_or_update_key_on_host(
             'traffic_limit_strategy': user_payload.get('trafficLimitStrategy'),
             'expiry_timestamp_ms': expiry_ts_ms,
             'connection_string': subscription_url,
+            'telegramId': user_payload.get('telegramId'),
         }
     except RemnawaveAPIError as exc:
         logger.error("Remnawave: ошибка create_or_update_key_on_host %s/%s: %s", host_name, email, exc)

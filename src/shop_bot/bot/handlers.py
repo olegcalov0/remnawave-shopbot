@@ -1224,6 +1224,10 @@ def get_user_router() -> Router:
         try:
             if message.from_user and message.from_user.username: metadata.setdefault('tg_username', message.from_user.username)
         except Exception: pass
+        if metadata.get('action') == 'traffic_purchase':
+            from shop_bot.modules import fulfillment as ff
+            ff.confirm_payment_and_enqueue(metadata.get('payment_method') or 'Telegram Stars', metadata.get('payment_id'), metadata)
+            return
         await process_successful_payment(bot, metadata)
     # ===== Конец функции stars_success_handler =====
 
@@ -1391,7 +1395,14 @@ def get_user_router() -> Router:
         if paid:
             logger.info(f"YooMoney Check: Платеж {pid} подтвержден.")
             metadata = find_and_complete_pending_transaction(pid)
-            if metadata: await process_successful_payment(bot, metadata)
+            if metadata:
+                _action = metadata.get('action')
+                if _action == 'traffic_purchase':
+                    from shop_bot.modules import fulfillment as ff
+                    ff.confirm_payment_and_enqueue(metadata.get('payment_method') or 'YooMoney', pid, metadata)
+                    await callback.answer("✅ Оплата прошла успешно! Гигабайты начисляются.", show_alert=True)
+                    return
+                await process_successful_payment(bot, metadata)
             await callback.answer("✅ Оплата прошла успешно! Ваш профиль активирован.", show_alert=True)
             return
 
@@ -2200,6 +2211,8 @@ def get_user_router() -> Router:
                 attempt += 1
 
             trial_traffic, trial_hwid = int(get_setting("trial_traffic_limit_gb") or 0), int(get_setting("trial_hwid_limit") or 0)
+            trial_hybrid_traffic = int(get_setting("trial_hybrid_traffic_limit_gb") or 0)
+            trial_hybrid_hwid = int(get_setting("trial_hybrid_hwid_limit") or 0)
             trial_internal_squad_uuid = (get_setting("trial_internal_squad_uuid") or "").strip() or None
 
             from shop_bot.data_manager import traffic_repository as tr_repo
@@ -2216,9 +2229,9 @@ def get_user_router() -> Router:
                         telegram_username=user_data.get('username'),
                         expire_at=_expire_dt,
                         base_traffic_limit_bytes=_uc.gb_to_bytes(trial_traffic) if trial_traffic > 0 else None,
-                        hybrid_traffic_limit_bytes=_uc.gb_to_bytes(int(_host_hybrid.get("hybrid_traffic_limit_gb") or 0)) if _host_hybrid.get("hybrid_traffic_limit_gb") else None,
+                        hybrid_traffic_limit_bytes=_uc.gb_to_bytes(trial_hybrid_traffic) if trial_hybrid_traffic > 0 else None,
                         base_hwid_limit=trial_hwid if trial_hwid > 0 else None,
-                        hybrid_hwid_limit=int(_host_hybrid.get("hybrid_hwid_limit") or 0) if _host_hybrid.get("hybrid_hwid_limit") else None,
+                        hybrid_hwid_limit=trial_hybrid_hwid if trial_hybrid_hwid > 0 else None,
                         traffic_limit_strategy=_host_hybrid.get("traffic_limit_strategy") or "NO_RESET",
                         primary_email=candidate_email,
                     )
@@ -2242,6 +2255,18 @@ def get_user_router() -> Router:
             if not result:
                 await smart_edit_message(message, "❌ <b>Ошибка сервера</b>\nНе удалось сгенерировать конфигурацию. Попробуйте выбрать другой сервер.")
                 return
+
+            # Идентификация: сверка telegramId из панели с Telegram ID пользователя
+            _remote_tg = result.get('telegramId') if isinstance(result, dict) else None
+            if _remote_tg not in (None, '', 'None', 0):
+                try:
+                    _ok = int(_remote_tg) == int(user_id)
+                except (TypeError, ValueError):
+                    _ok = False
+                if not _ok:
+                    logger.error("IDENTITY MISMATCH (trial): user=%s panel telegramId=%s — ключ не выдан", user_id, _remote_tg)
+                    await smart_edit_message(message, "⚠️ <b>Ошибка идентификации</b>\nНе удалось создать пробный ключ. Обратитесь в поддержку.")
+                    return
 
             set_trial_used(user_id)
             new_key_id = rw_repo.record_key_from_payload(user_id=user_id, payload=result, host_name=host_name)
@@ -2354,6 +2379,33 @@ def get_user_router() -> Router:
             # При гибридном режиме строка «Лимит трафика» (сырые байты) скрывается:
             # блок 📊 Трафик показывает читаемые WiFi/LTE лимиты (требование владельца)
             _is_hybrid_key = bool(traffic_stats and traffic_stats.get("lte"))
+
+            # Идентификация по panel telegramId: панельный telegramId должен
+            # совпадать с Telegram ID владельца ключа. При рассинхроне ссылка
+            # не выводится (пользователю показывается заглушка выше).
+            _remote_tg = (remote_user or {}).get('telegramId') if remote_user else None
+            if _remote_tg not in (None, '', 'None', 0) and str(_remote_tg) != str(user_id):
+                logger.error(
+                    "IDENTITY MISMATCH (key card): key_id=%s owner=%s panel telegramId=%s — ссылка не выводится",
+                    key_id, user_id, _remote_tg)
+                try:
+                    tr_repo.record_traffic_operation(
+                        idempotency_key=f"identity_mismatch_card:{key_id}:{uc.today_date_str()}",
+                        operation_type=const.OP_HYBRID_REPAIR, key_id=key_id,
+                        actor_type=const.ACTOR_SYSTEM, result=const.OP_RESULT_FAILED,
+                        error_text=f"panel telegramId={_remote_tg} != owner {user_id}")
+                except Exception:
+                    pass
+                try:
+                    await smart_edit_message(
+                        message_to_edit,
+                        "⚠️ <b>Временная ошибка синхронизации</b>\n\n"
+                        "Данные подписки временно недоступны. Повторите попытку позже — "
+                        "если проблема сохранится, обратитесь в поддержку.",
+                        keyboards.create_back_to_menu_keyboard())
+                except Exception:
+                    pass
+                return
 
             text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=(None if _is_hybrid_key else tr_lim), traffic_used=tr_usg, comment=key_data.get('comment_key'), traffic_stats=traffic_stats)
             kb_final = keyboards.create_dynamic_key_info_keyboard(key_id, conn, traffic_purchase_available=bool(_types_available))
@@ -3847,23 +3899,33 @@ async def notify_admin_of_purchase(bot: Bot, metadata: dict):
         username_str = f"@{username}" if username else "N/A"
 
         method = {'Balance': 'Баланс', 'Card': 'Карта', 'Crypto': 'Крипто', 'USDT': 'USDT', 'TON': 'TON'}.get(metadata.get('payment_method'), metadata.get('payment_method') or 'N/A')
-        plan = get_plan_by_id(metadata.get('plan_id')); plan_name = plan.get('plan_name', 'N/A') if plan else 'N/A'
-        
+
         from shop_bot.data_manager.database import get_today_income_by_currency
         today = get_today_income_by_currency()
         today_rub = today.get('rub', 0)
         yesterday_rub = today.get('yesterday_rub', 0)
         today_crypto = today.get('crypto', 0)
-        
+
+        if action == 'traffic_purchase':
+            gb = metadata.get('gb_amount', 0)
+            ttype = metadata.get('traffic_type', '?')
+            burn = "несгораемые" if metadata.get('is_non_burnable') else "сгораемые"
+            plan_name = f"{gb} ГБ ({ttype}, {burn})"
+            type_str = "Докупка трафика 📊"
+        else:
+            plan = get_plan_by_id(metadata.get('plan_id')); plan_name = plan.get('plan_name', 'N/A') if plan else 'N/A'
+            plan_name = f"{plan_name} ({months} мес.)"
+            type_str = 'Новый ключ ➕' if action == 'new' else 'Продление ♻️'
+
         txt = (
             "📥 <b>Новая оплата</b>\n"
             f"👤 Пользователь: <code>{user_id}</code>\n"
             f"💌 Username: {username_str}\n"
             f"🌍 Локация: <b>{host}</b>\n"
-            f"📦 Тариф: {plan_name} ({months} мес.)\n"
+            f"📦 {plan_name}\n"
             f"💳 Метод: {method}\n"
             f"💰 Сумма: {float(price):.2f} RUB\n"
-            f"⚙️ Тип: {'Новый ключ ➕' if action == 'new' else 'Продление ♻️'}\n\n"
+            f"⚙️ Тип: {type_str}\n\n"
             f"<blockquote>💵 Касса за сегодня ₽: {today_rub:,.2f} \n"
             f"💵 Касса за вчера ₽: {yesterday_rub:,.2f}\n"
             f"💎 Касса за сегодня $: {today_crypto:,.2f} </blockquote>"
@@ -3887,7 +3949,17 @@ async def notify_admin_of_purchase(bot: Bot, metadata: dict):
 # Маршрутизирует выполнение заказа: пополнение баланса, создание нового ключа или продление существующего
 async def process_successful_payment(bot: Bot | None, metadata: dict) -> bool:
     logger.info(f"💳 Обработка платежа: {metadata.get('user_id')} | {metadata.get('action')}")
-    
+
+    action = metadata.get('action')
+
+    # traffic_purchase: перенаправление в fulfillment worker (не выдача ключа!)
+    if action == "traffic_purchase":
+        from shop_bot.modules import fulfillment as ff
+        provider = metadata.get('payment_method') or 'Unknown'
+        ff.confirm_payment_and_enqueue(provider, metadata.get('payment_id'), metadata)
+        logger.info(f"TRAFFIC: платёж {metadata.get('payment_id')} передан в fulfillment worker")
+        return True
+
     pay_id = metadata.get('payment_id')
     if pay_id and check_transaction_exists(pay_id):
         logger.warning(f"Повторная попытка обработки платежа {pay_id}. Операция отклонена.")
@@ -4081,6 +4153,48 @@ async def process_successful_payment(bot: Bot | None, metadata: dict) -> bool:
                     traffic_limit_gb=tr_lim_gb,
                     external_squad_uuid=external_squad
                 )
+                # Идентификация клиента по panel telegramId: сверка после создания.
+                # Если панель вернула чужой telegramId — не выдаём ключ, ищем
+                # панельного пользователя с правильным telegramId.
+                if res:
+                    _remote_tg = (res or {}).get('telegramId')
+                    _ok = True
+                    if _remote_tg not in (None, '', 'None', 0):
+                        try:
+                            _ok = int(_remote_tg) == int(uid)
+                        except (TypeError, ValueError):
+                            _ok = False
+                    if not _ok:
+                        logger.error("IDENTITY MISMATCH (new key): user=%s panel telegramId=%s — ищем пользователя с верным telegramId", uid, _remote_tg)
+                        try:
+                            tr_repo.record_traffic_operation(
+                                idempotency_key=f"identity_mismatch_new:{uid}:{res.get('id')}",
+                                operation_type=const.OP_HYBRID_REPAIR, key_id=0,
+                                actor_type=const.ACTOR_SYSTEM,
+                                result=const.OP_RESULT_FAILED,
+                                error_text=f"panel telegramId={_remote_tg} != user {uid}",
+                            )
+                        except Exception:
+                            pass
+                        _fixed = await remnawave_api.find_panel_user_by_telegram_id(host, uid)
+                        if _fixed and str(_fixed.get('id')) != str(res.get('id')):
+                            logger.info("IDENTITY FIX: найден panel user %s с telegramId=%s для user %s", _fixed.get('id'), _fixed.get('telegramId'), uid)
+                            _sub = remnawave_api.extract_subscription_url(_fixed) or ''
+                            res = {
+                                'client_uuid': _fixed.get('id'),
+                                'short_uuid': _fixed.get('shortUuid'),
+                                'email': _fixed.get('email') or c_email,
+                                'host_name': host,
+                                'squad_uuid': res.get('squad_uuid') or '',
+                                'subscription_url': _sub,
+                                'traffic_limit_bytes': _fixed.get('trafficLimitBytes'),
+                                'traffic_limit_strategy': _fixed.get('trafficLimitStrategy'),
+                                'expiry_timestamp_ms': res.get('expiry_timestamp_ms'),
+                                'connection_string': _sub,
+                                'telegramId': _fixed.get('telegramId'),
+                            }
+                        else:
+                            res = None
             if not res:
                 add_to_balance(uid, float(price))
                 logger.error(f"Возврат средств: {price} RUB возвращено пользователю {uid} (ошибка API VPN на хосте {host})")

@@ -421,6 +421,34 @@
                             </div>
                             <div>
                                 <label
+                                    class="block text-white/40 text-[10px] uppercase font-bold tracking-wider mb-1.5 ml-1">
+                                    Трафик 2-го польз. (ГБ)
+                                    <span class="text-white/20 normal-case tracking-normal">(для hybrid-триала)</span>
+                                </label>
+                                <div class="relative group">
+                                    <span
+                                        class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-white/20 text-sm group-focus-within:text-primary transition-colors">speed</span>
+                                    <input type="number" name="trial_hybrid_traffic_limit_gb"
+                                        value="{{ settings.trial_hybrid_traffic_limit_gb or '0' }}"
+                                        class="w-full bg-black/30 border border-white/10 rounded-xl pl-10 pr-3 py-2 text-white text-sm focus:ring-1 focus:ring-primary/40 outline-none transition-all" />
+                                </div>
+                            </div>
+                            <div>
+                                <label
+                                    class="block text-white/40 text-[10px] uppercase font-bold tracking-wider mb-1.5 ml-1">
+                                    HWID 2-го польз.
+                                    <span class="text-white/20 normal-case tracking-normal">(для hybrid-триала)</span>
+                                </label>
+                                <div class="relative group">
+                                    <span
+                                        class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-white/20 text-sm group-focus-within:text-primary transition-colors">fingerprint</span>
+                                    <input type="number" name="trial_hybrid_hwid_limit"
+                                        value="{{ settings.trial_hybrid_hwid_limit or '0' }}"
+                                        class="w-full bg-black/30 border border-white/10 rounded-xl pl-10 pr-3 py-2 text-white text-sm focus:ring-1 focus:ring-primary/40 outline-none transition-all" />
+                                </div>
+                            </div>
+                            <div>
+                                <label
                                     class="flex items-center text-white/40 text-[10px] uppercase font-bold tracking-wider mb-1.5 ml-1">
                                     UUID
                                     <span class="group relative ml-1 inline-flex items-center">
