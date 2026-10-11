@@ -3830,7 +3830,7 @@
         if (!confirm(`Запустить миграцию существующих ключей хоста «${hostName}» в гибридный режим?`)) return;
         const fd = new FormData();
         fd.append('host_name', hostName);
-        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        fd.append('csrf_token', document.querySelector('input[name="csrf_token"]')?.value || '');
         const r = await sendRequest('/hybrid-migration/start', 'POST', fd);
         if (r.ok) { showToast('success', 'Миграция запущена'); refreshMigrationStatus(hostName); }
         else showToast('danger', r.error || 'Ошибка запуска');
@@ -3838,7 +3838,7 @@
 
     async function pauseHybridMigration(hostName) {
         const fd = new FormData();
-        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        fd.append('csrf_token', document.querySelector('input[name="csrf_token"]')?.value || '');
         const r = await sendRequest('/hybrid-migration/pause', 'POST', fd);
         if (r.ok) { showToast('warning', 'Миграция приостановлена'); refreshMigrationStatus(hostName); }
         else showToast('danger', r.error || 'Ошибка');
@@ -3846,7 +3846,7 @@
 
     async function resumeHybridMigration(hostName) {
         const fd = new FormData();
-        fd.append('csrf_token', document.querySelector('meta[name="csrf-token"]')?.content || '');
+        fd.append('csrf_token', document.querySelector('input[name="csrf_token"]')?.value || '');
         const r = await sendRequest('/hybrid-migration/resume', 'POST', fd);
         if (r.ok) { showToast('success', 'Миграция продолжена'); refreshMigrationStatus(hostName); }
         else showToast('danger', r.error || 'Ошибка');

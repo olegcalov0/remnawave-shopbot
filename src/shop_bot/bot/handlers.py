@@ -2736,6 +2736,33 @@ def get_user_router() -> Router:
             logger.error(f"Stars invoice error: {e}")
             await callback.message.answer("❌ Ошибка отправки инвойса Telegram Stars.")
 
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yoomoney")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_yoomoney(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        wallet = get_setting("yoomoney_wallet")
+        if not wallet:
+            return await callback.message.answer("⚠️ Оплата через ЮMoney временно недоступна.")
+        w = (wallet or "").strip()
+        if not (w.isdigit() and len(w) >= 11):
+            return await callback.message.answer("❌ Ошибка конфигурации ЮMoney. Обратитесь к администратору.")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id:
+            return await callback.message.answer("⚠️ Ошибка создания счёта.")
+        meta["payment_method"] = "YooMoney"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        try:
+            price_rub = Decimal(str(meta["price"]))
+            if price_rub < Decimal("1.00"):
+                return await callback.message.answer("❌ Минимум для ЮMoney — 1 ₽.")
+            pay_url = _build_yoomoney_link(wallet, price_rub, payment_id, "Докупка трафика")
+            await smart_edit_message(callback.message, "💜 <b>Оплата через ЮMoney</b>\nНажмите на кнопку ниже для оплаты через кошелёк:", keyboards.create_payment_keyboard("YooMoney", pay_url, back_callback="show_profile"), get_setting("payment_image"))
+            await state.clear()
+        except Exception as e:
+            logger.error(f"traffic_pay_yoomoney Ошибка: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при создании платежа ЮMoney.")
+
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data.startswith("traffic_pay_platega"))
     @anti_spam
     @registration_required
