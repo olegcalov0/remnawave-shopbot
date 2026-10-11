@@ -50,6 +50,7 @@ def test_refund_after_30_min(test_db):
     with sqlite3.connect(test_db) as conn:
         _seed_host(conn)
         key_id = _seed_key(conn)
+        conn.execute("INSERT OR IGNORE INTO users (telegram_id, balance) VALUES (1, 0)")
         conn.execute("UPDATE users SET balance = 0 WHERE telegram_id = 1")
         conn.commit()
 

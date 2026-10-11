@@ -2255,15 +2255,15 @@ def get_user_router() -> Router:
             tr_lim = (sub or {}).get('trafficLimitBytes', (sub or {}).get('trafficLimit'))
             tr_usg = (sub or {}).get('usedTrafficBytes', (sub or {}).get('trafficUsed'))
 
-            # При гибридном режиме строка «Лимит трафика» (сырые байты) скрывается:
-            # блок 📊 Трафик показывает читаемые WiFi/LTE лимиты (требование владельца)
-            _is_hybrid_key = bool(traffic_stats and traffic_stats.get("lte"))
-
             # Этап 5 ТЗ: расширенная статистика WiFi/LTE (без раскрытия гибрида)
             try:
                 traffic_stats = await _ts.get_key_traffic_stats(key_id)
             except Exception:
                 traffic_stats = None
+
+            # При гибридном режиме строка «Лимит трафика» (сырые байты) скрывается:
+            # блок 📊 Трафик показывает читаемые WiFi/LTE лимиты (требование владельца)
+            _is_hybrid_key = bool(traffic_stats and traffic_stats.get("lte"))
 
             text_final = get_key_info_text(key_num, expiry, created, conn, email=email, hwid_limit=hw_lim, hwid_usage=hw_usg, traffic_limit=(None if _is_hybrid_key else tr_lim), traffic_used=tr_usg, comment=key_data.get('comment_key'), traffic_stats=traffic_stats)
             kb_final = keyboards.create_dynamic_key_info_keyboard(key_id, conn, traffic_purchase_available=bool(_types_available))
