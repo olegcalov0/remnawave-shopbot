@@ -2054,10 +2054,18 @@ def create_webhook_app(bot_controller_instance):
         try:
             key = rw_repo.get_key_by_id(key_id)
             if key:
+                from shop_bot.data_manager import traffic_repository as tr_repo
+                from shop_bot.modules import hybrid_service
+                pair = tr_repo.get_pair_by_primary_key(key_id)
                 try:
-                    asyncio.run(remnawave_api.delete_client_on_host(key['host_name'], key['key_email']))
-                except Exception:
-                    pass
+                    # Если ключ гибридный — удаляем обоих пользователей из Remnawave
+                    if pair and pair.get('status') in ('active', 'repair_required', 'broken'):
+                        logger.info("Админка delete_key: удаление гибридной пары (key %s)...", key_id)
+                        asyncio.run(hybrid_service.delete_pair_users(pair))
+                    else:
+                        asyncio.run(remnawave_api.delete_client_on_host(key['host_name'], key['key_email']))
+                except Exception as e:
+                    logger.error("Админка delete_key error: %s", e)
         except Exception:
             pass
         ok = delete_key_by_id(key_id)
@@ -2206,7 +2214,13 @@ def create_webhook_app(bot_controller_instance):
                         except Exception:
                             pass
                     if host_for_delete:
-                        asyncio.run(remnawave_api.delete_client_on_host(host_for_delete, k.get('key_email')))
+                        from shop_bot.data_manager import traffic_repository as tr_repo
+                        from shop_bot.modules import hybrid_service
+                        pair = tr_repo.get_pair_by_primary_key(k.get('key_id') or 0)
+                        if pair and pair.get('status') in ('active', 'repair_required', 'broken'):
+                            asyncio.run(hybrid_service.delete_pair_users(pair))
+                        else:
+                            asyncio.run(remnawave_api.delete_client_on_host(host_for_delete, k.get('key_email')))
                 except Exception:
                     pass
                 delete_key_by_id(k.get('key_id'))
@@ -3210,7 +3224,13 @@ def create_webhook_app(bot_controller_instance):
         total = len(keys_to_revoke)
 
         for key in keys_to_revoke:
-            result = asyncio.run(remnawave_api.delete_client_on_host(key['host_name'], key['key_email']))
+            from shop_bot.data_manager import traffic_repository as tr_repo
+            from shop_bot.modules import hybrid_service
+            pair = tr_repo.get_pair_by_primary_key(key.get('key_id') or 0)
+            if pair and pair.get('status') in ('active', 'repair_required', 'broken'):
+                result = asyncio.run(hybrid_service.delete_pair_users(pair))
+            else:
+                result = asyncio.run(remnawave_api.delete_client_on_host(key['host_name'], key['key_email']))
             if result:
                 success_count += 1
 

@@ -567,6 +567,22 @@ def create_topup_payment_method_keyboard(payment_methods: dict) -> InlineKeyboar
     builder.adjust(1)
     return builder.as_markup()
 
+def create_traffic_payment_method_keyboard(payment_methods: dict) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for method in get_available_payment_methods(include_balance=True, balance=payment_methods.get('balance')):
+        callback_data = method.get("traffic_callback")
+        if not callback_data:
+            continue
+        builder.button(
+            text=_payment_button_text(method["method"], method["bot_default_label"], method.get("suffix", "")),
+            callback_data=callback_data,
+        )
+    key_id = payment_methods.get("key_id")
+    traffic_type = payment_methods.get("traffic_type")
+    builder.button(text="⬅️ Отмена", callback_data=f"traffic_type_{key_id}_{traffic_type}")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_declension(n, forms):
     n = abs(n) % 100
     n1 = n % 10

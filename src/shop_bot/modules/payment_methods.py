@@ -15,6 +15,7 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
             "method": "balance",
             "purchase_callback": "pay_balance",
             "topup_callback": None,
+            "traffic_callback": "traffic_pay_balance",
             "webapp_id": "pay_balance",
             "bot_default_label": "💼 Оплатить с баланса",
             "webapp_default_label": "Баланс",
@@ -29,6 +30,7 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
             "method": "yookassa",
             "purchase_callback": "pay_yookassa",
             "topup_callback": "topup_pay_yookassa",
+            "traffic_callback": "traffic_pay_yookassa",
             "webapp_id": "pay_yookassa",
             "bot_default_label": "🏦 СБП / Банковская карта" if sbp_enabled else "🏦 Банковская карта",
             "webapp_default_label": "СБП / Банковская карта" if sbp_enabled else "Банковская карта",
@@ -37,20 +39,21 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
         })
 
     ordered_methods = [
-        ("platega_payform", "platega_payform_enabled", "pay_platega_payform", "topup_pay_platega_payform", "💳 Platega", "Platega", "credit_card"),
-        ("platega", "platega_enabled", "pay_platega", "topup_pay_platega", "💳 СБП / Platega", "СБП / Platega", "payments"),
-        ("platega_crypto", "platega_crypto_enabled", "pay_platega_crypto", "topup_pay_platega_crypto", "🪙 Crypto / Platega", "Крипта / Platega", "payments"),
-        ("tonconnect", None, "pay_tonconnect", "topup_pay_tonconnect", "🪙 TON Connect", "TON Connect", "wallet"),
-        ("stars", "stars_enabled", "pay_stars", "topup_pay_stars", "⭐ Telegram Stars", "Telegram Stars", "star"),
-        ("yoomoney", "yoomoney_enabled", "pay_yoomoney", "topup_pay_yoomoney", "💜 ЮMoney (кошелёк)", "ЮMoney (кошелёк)", "account_balance_wallet"),
+        ("platega_payform", "platega_payform_enabled", "pay_platega_payform", "topup_pay_platega_payform", "traffic_pay_platega_payform", "💳 Platega", "Platega", "credit_card"),
+        ("platega", "platega_enabled", "pay_platega", "topup_pay_platega", "traffic_pay_platega", "💳 СБП / Platega", "СБП / Platega", "payments"),
+        ("platega_crypto", "platega_crypto_enabled", "pay_platega_crypto", "topup_pay_platega_crypto", "traffic_pay_platega_crypto", "🪙 Crypto / Platega", "Крипта / Platega", "payments"),
+        ("tonconnect", None, "pay_tonconnect", "topup_pay_tonconnect", "traffic_pay_tonconnect", "🪙 TON Connect", "TON Connect", "wallet"),
+        ("stars", "stars_enabled", "pay_stars", "topup_pay_stars", "traffic_pay_stars", "⭐ Telegram Stars", "Telegram Stars", "star"),
+        ("yoomoney", "yoomoney_enabled", "pay_yoomoney", "topup_pay_yoomoney", "traffic_pay_yoomoney", "💜 ЮMoney (кошелёк)", "ЮMoney (кошелёк)", "account_balance_wallet"),
     ]
 
-    for method, enabled_key, purchase_callback, topup_callback, bot_default_label, webapp_default_label, icon in ordered_methods[:3]:
+    for method, enabled_key, purchase_callback, topup_callback, traffic_callback, bot_default_label, webapp_default_label, icon in ordered_methods[:3]:
         if (get_setting(enabled_key) or "false").strip().lower() == "true":
             methods.append({
                 "method": method,
                 "purchase_callback": purchase_callback,
                 "topup_callback": topup_callback,
+                "traffic_callback": traffic_callback,
                 "webapp_id": purchase_callback,
                 "bot_default_label": bot_default_label,
                 "webapp_default_label": webapp_default_label,
@@ -65,6 +68,7 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
             "method": "cryptobot",
             "purchase_callback": "pay_cryptobot",
             "topup_callback": "topup_pay_cryptobot",
+            "traffic_callback": "traffic_pay_cryptobot",
             "webapp_id": "pay_cryptobot",
             "bot_default_label": "💎 Криптовалюта",
             "webapp_default_label": "Криптовалюта",
@@ -76,6 +80,7 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
             "method": "heleket",
             "purchase_callback": "pay_heleket",
             "topup_callback": "topup_pay_heleket",
+            "traffic_callback": "traffic_pay_heleket",
             "webapp_id": "pay_heleket",
             "bot_default_label": "💎 Криптовалюта",
             "webapp_default_label": "Криптовалюта",
@@ -83,7 +88,7 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
             "suffix": "",
         })
 
-    for method, enabled_key, purchase_callback, topup_callback, bot_default_label, webapp_default_label, icon in ordered_methods[3:]:
+    for method, enabled_key, purchase_callback, topup_callback, traffic_callback, bot_default_label, webapp_default_label, icon in ordered_methods[3:]:
         enabled = False
         if method == "tonconnect":
             enabled = bool((get_setting("ton_wallet_address") or "") and (get_setting("tonapi_key") or ""))
@@ -94,11 +99,11 @@ def get_available_payment_methods(include_balance: bool = False, balance: float 
                 "method": method,
                 "purchase_callback": purchase_callback,
                 "topup_callback": topup_callback,
+                "traffic_callback": traffic_callback,
                 "webapp_id": purchase_callback,
                 "bot_default_label": bot_default_label,
                 "webapp_default_label": webapp_default_label,
                 "icon": icon,
                 "suffix": "",
             })
-
     return methods

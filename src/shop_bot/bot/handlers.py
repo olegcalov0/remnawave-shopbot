@@ -2526,27 +2526,10 @@ def get_user_router() -> Router:
         name = host.get(f"{traffic_type}_traffic_name") or traffic_type
         burn_str = "несгораемые" if non_burnable else "сгораемые"
 
-        # создание purchase draft + pending payment (источник истины — БД)
-        payment_id = f"traffic-{uuid.uuid4().hex[:16]}"
-        draft_meta = {
-            "action": "traffic_purchase", "payment_id": payment_id,
-            "user_id": callback.from_user.id, "key_id": key_id,
-            "traffic_type": traffic_type, "gb_amount": gb_amount,
-            "is_non_burnable": non_burnable, "package_id": package_id,
-            "price": float(pricing["payable_rub"]),
-            "host_name": host_name,
-        }
-        try:
-            purchase_id = ts.create_purchase_draft(
-                payment_id=payment_id, user_id=callback.from_user.id, key_id=key_id,
-                traffic_type=traffic_type, gb_amount=gb_amount, non_burnable=non_burnable,
-                source_kind="package" if package else "custom", package=package, pricing=pricing)
-            if purchase_id is None:
-                return await callback.answer("⚠️ Не удалось создать черновик покупки.", show_alert=True)
-            create_payload_pending(payment_id, callback.from_user.id, float(pricing["payable_rub"]), draft_meta)
-        except Exception as e:
-            logger.error(f"traffic purchase draft: {e}", exc_info=True)
-            return await callback.answer("⚠️ Ошибка создания счёта.", show_alert=True)
+        # сохраняем расчёт в state, payment_id/draft создадим при выборе метода
+        await state.update_data(
+            pricing=pricing, source_kind="package" if package else "custom",
+            host_name=host_name, non_burnable=non_burnable)
 
         text = (f"✅ <b>Подтверждение покупки</b>\n\n"
                 f"Тип: <b>{name}</b>\n"
@@ -2554,55 +2537,206 @@ def get_user_router() -> Router:
                 f"Скидка: {uc.money_to_str(pricing.get('discount_rub', 0))} ₽\n"
                 f"<b>Итого: {uc.money_to_str(pricing['payable_rub'])} ₽</b>\n\n"
                 f"Выберите способ оплаты:")
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        kb = InlineKeyboardBuilder()
-        kb.button(text="💰 Баланс", callback_data=f"traffic_pay_balance_{payment_id}")
-        kb.button(text="⬅️ Отмена", callback_data=f"show_key_{key_id}")
-        kb.adjust(1)
-        await smart_edit_message(callback.message, text, kb.as_markup())
-        await state.set_state(TrafficPurchaseProcess.waiting_for_confirm)
-        await state.update_data(payment_id=payment_id)
-    # ===== Конец функции traffic_confirm_and_pay =====
 
-    @user_router.callback_query(F.data.startswith("traffic_pay_balance_"))
+        from shop_bot.data_manager.database import get_balance
+        balance = get_balance(callback.from_user.id)
+        kb_data = {'balance': balance, 'key_id': key_id, 'traffic_type': traffic_type}
+        await smart_edit_message(callback.message, text, keyboards.create_traffic_payment_method_keyboard(kb_data))
+        await state.set_state(TrafficPurchaseProcess.waiting_for_confirm)
+
+    # Вспомогательная функция создания драфта перед оплатой
+    async def _create_traffic_draft(state: FSMContext, user_id: int):
+        data = await state.get_data()
+        key_id = data.get("traffic_key_id")
+        traffic_type = data.get("traffic_type")
+        gb_amount = data.get("gb_amount")
+        non_burnable = data.get("non_burnable")
+        source_kind = data.get("source_kind")
+        package_id = data.get("package_id")
+        pricing = data.get("pricing")
+        host_name = data.get("host_name")
+
+        payment_id = f"traffic-{uuid.uuid4().hex[:16]}"
+        draft_meta = {
+            "action": "traffic_purchase", "payment_id": payment_id,
+            "user_id": user_id, "key_id": key_id,
+            "traffic_type": traffic_type, "gb_amount": gb_amount,
+            "is_non_burnable": non_burnable, "package_id": package_id,
+            "price": float(pricing["payable_rub"]), "host_name": host_name,
+        }
+        from shop_bot.modules import traffic_service as ts
+        purchase_id = ts.create_purchase_draft(
+            payment_id=payment_id, user_id=user_id, key_id=key_id,
+            traffic_type=traffic_type, gb_amount=gb_amount, non_burnable=non_burnable,
+            source_kind=source_kind, package={"package_id": package_id} if package_id else None,
+            pricing=pricing)
+        if purchase_id is None:
+            return None, None
+        return payment_id, draft_meta
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_balance")
     @anti_spam
     @registration_required
     async def traffic_pay_by_balance(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer()
-        payment_id = callback.data[len("traffic_pay_balance_"):]
-        purchase = tr_repo.get_traffic_purchase(payment_id)
-        if not purchase:
-            return await callback.answer("⚠️ Счёт не найден.", show_alert=True)
-        if purchase['user_id'] != callback.from_user.id:
-            return await callback.answer("❌ Доступ запрещён.", show_alert=True)
-        if purchase['status'] not in (const.PURCHASE_CREATED,):
-            return await callback.answer("ℹ️ Счёт уже обработан.", show_alert=True)
-
-        price = float(purchase['total_price_rub'])
-        balance = get_balance(callback.from_user.id) or 0
+        data = await state.get_data()
+        pricing = data.get("pricing")
+        price = float(pricing["payable_rub"])
+        
+        from shop_bot.data_manager.database import get_balance
+        balance = get_balance(callback.fromuser.id) if False else get_balance(callback.from_user.id)
         if balance < price:
             return await callback.answer(f"🚫 Недостаточно средств: {balance:.2f} / {price:.2f} ₽", show_alert=True)
 
-        from shop_bot.modules import fulfillment as ff
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return await callback.answer("⚠️ Ошибка создания счёта.", show_alert=True)
+
+        from shop_bot.data_manager.remnawave_repository import deduct_from_balance
         if not deduct_from_balance(callback.from_user.id, price):
             return await callback.answer("⚠️ Ошибка списания баланса.", show_alert=True)
-        # переводим purchase в paid и ставим fulfillment job (единый поток)
+            
         tr_repo.transition_purchase_status(payment_id, (const.PURCHASE_CREATED,), const.PURCHASE_PAID)
-        meta = {
-            "action": "traffic_purchase", "payment_id": payment_id,
-            "user_id": callback.from_user.id, "key_id": purchase['key_id'],
-            "traffic_type": purchase['traffic_type'], "gb_amount": purchase['gb_amount'],
-            "is_non_burnable": bool(purchase['is_non_burnable']),
-            "price": price, "host_name": purchase['host_name'],
-            "payment_method": "Balance",
-        }
+        meta["payment_method"] = "Balance"
+        
+        from shop_bot.modules import fulfillment as ff
         ff.confirm_payment_and_enqueue("Balance", payment_id, meta)
-        await smart_edit_message(
-            callback.message,
-            "✅ <b>Оплата принята!</b>\nГигабайты начисляются автоматически. Вы получите уведомление.",
-            keyboards.create_back_to_menu_keyboard())
+        await smart_edit_message(callback.message, "✅ <b>Оплата принята!</b>\nГигабайты начисляются. Вы получите уведомление.", keyboards.create_back_to_menu_keyboard())
         await state.clear()
-    # ===== Конец функции traffic_pay_by_balance =====
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yookassa")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_yookassa(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        shop_id, secret = get_setting("yookassa_shop_id"), get_setting("yookassa_secret_key")
+        if not shop_id or not secret: return await callback.message.answer("⚠️ Оплата через ЮKassa временно недоступна.")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "YooKassa"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.yookassa_integration import create_yookassa_payment
+        payment_url = create_yookassa_payment(meta["price"], payment_id, f"Докупка трафика", shop_id, secret)
+        if payment_url:
+            await smart_edit_message(callback.message, "💳 <b>Оплата картой / СБП</b>\nНажмите кнопку ниже для перехода к оплате:", keyboards.create_payment_keyboard(payment_url))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка при создании платежа ЮKassa.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_cryptobot")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_cryptobot(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "CryptoBot"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.cryptobot_integration import create_crypto_invoice
+        invoice = await create_crypto_invoice(meta["price"], get_setting("cryptobot_token"), payment_id)
+        if invoice:
+            await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой</b>\nНажмите кнопку ниже:", keyboards.create_cryptobot_payment_keyboard(invoice.bot_invoice_url, invoice.invoice_id))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка при создании платежа CryptoBot.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_heleket")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_heleket(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "Heleket"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.heleket_integration import create_heleket_payment
+        payment_url = await create_heleket_payment(meta["price"], payment_id, get_setting("heleket_merchant_id"), get_setting("heleket_api_key"))
+        if payment_url:
+            await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой (Heleket)</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard(payment_url))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка при создании платежа Heleket.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_tonconnect")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_tonconnect(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "TON Connect"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.ton_integration import create_ton_payment
+        price_ton, connect_url = await create_ton_payment(meta["price"], payment_id, get_setting("ton_wallet_address"))
+        if connect_url:
+            await smart_edit_message(callback.message, f"🪙 <b>Оплата через TON Connect</b>\nК оплате: <b>~{price_ton:.2f} TON</b>", keyboards.create_ton_connect_keyboard(connect_url))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка TON Connect.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_stars")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_stars(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+        await callback.answer("⏳ Создание счета...")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "Telegram Stars"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        stars_amount = int(meta["price"] * float(get_setting("stars_per_rub") or 1.0))
+        from aiogram.types import LabeledPrice
+        prices = [LabeledPrice(label="Докупка трафика", amount=stars_amount)]
+        try:
+            await bot.send_invoice(callback.from_user.id, title="Докупка трафика", description="Покупка пакета гигабайтов", payload=payment_id, provider_token="", currency="XTR", prices=prices)
+            await state.clear()
+        except Exception as e:
+            logger.error(f"Stars invoice error: {e}")
+            await callback.message.answer("❌ Ошибка отправки инвойса Telegram Stars.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yoomoney")
+    @anti_spam
+    @registration_required
+    async def traffic_pay_yoomoney(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = "YooMoney"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.yoomoney_integration import create_yoomoney_payment
+        payment_url = create_yoomoney_payment(meta["price"], payment_id, "Докупка трафика", get_setting("yoomoney_wallet"))
+        if payment_url:
+            await smart_edit_message(callback.message, "💜 <b>Оплата ЮMoney</b>\nНажмите кнопку ниже:", keyboards.create_yoomoney_payment_keyboard(payment_url, payment_id))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка при создании платежа ЮMoney.")
+
+    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data.startswith("traffic_pay_platega"))
+    @anti_spam
+    @registration_required
+    async def traffic_pay_platega(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer("⏳ Создание счета...")
+        method_type = callback.data.replace("traffic_pay_platega", "")
+        if method_type == "_crypto": method_id = "crypto"
+        elif method_type == "_payform": method_id = "payform"
+        else: method_id = "sbp"
+        
+        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+        if not payment_id: return
+        meta["payment_method"] = f"Platega ({method_id})"
+        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
+        
+        from shop_bot.modules.platega_integration import create_platega_payment
+        payment_url = await create_platega_payment(meta["price"], payment_id, "Докупка трафика", get_setting("platega_merchant_id"), get_setting("platega_api_key"), method_id)
+        if payment_url:
+            await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard(payment_url))
+            await state.clear()
+        else:
+            await callback.message.answer("❌ Ошибка при создании платежа Platega.")
 
     # ===== НАЧАЛО ПЕРЕНОСА КЛЮЧА НА ДРУГОЙ СЕРВЕР =====
     # Предоставляет выбор доступных серверов для миграции текущего ключа

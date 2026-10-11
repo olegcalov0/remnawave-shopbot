@@ -57,13 +57,34 @@ def confirm_payment_and_enqueue(provider: str, payment_id: str, metadata: dict |
     else:
         logger.info("FULFILLMENT confirm: %s payment=%s — создан job #%s (action=%s)",
                     provider, payment_id, job_id, action)
+
+    # Немедленное исполнение (без ожидания тика scheduler):
+    # запускаем воркер сразу в фоновом цикле событий бота
+    try:
+        from flask import current_app
+        loop = current_app.config.get('EVENT_LOOP')
+        if loop and loop.is_running():
+            from shop_bot.bot import _bot_controller
+            bot_instance = _bot_controller.get_bot_instance()
+            asyncio.run_coroutine_threadsafe(run_fulfillment_worker(bot_instance, batch=5), loop)
+            logger.info("FULFILLMENT: запущен мгновенный воркер для payment %s", payment_id)
+    except Exception:
+        # вне контекста Flask (например, тесты или вызов из хендлера)
+        try:
+            cur_loop = asyncio.get_event_loop()
+            if cur_loop and cur_loop.is_running():
+                from shop_bot.bot import _bot_controller
+                bot_instance = _bot_controller.get_bot_instance()
+                asyncio.create_task(run_fulfillment_worker(bot_instance, batch=5))
+                logger.info("FULFILLMENT: запущен фоновый async task воркера для payment %s", payment_id)
+        except Exception:
+            pass
     return True
 
 
 def _delay_for_attempt(attempts: int) -> str:
-    """Экспоненциальная задержка: 30s, 60s, 120s, ... cap 30m."""
-    seconds = min(30 * (2 ** max(0, attempts - 1)), 1800)
-    return (uc.get_msk_time() + timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    """Ретрай каждые 5 минут (300с). 6 попыток = 30 минут, затем возврат средств (рефанд)."""
+    return (uc.get_msk_time() + timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def _notify_admins(bot, text: str):
@@ -122,7 +143,7 @@ async def process_job(bot, job: dict) -> bool:
 
     error = job.get("__error__") or "fulfillment failed"
     attempts = int(job.get("attempts") or 1)
-    max_attempts = int(job.get("max_attempts") or 10)
+    max_attempts = int(job.get("max_attempts") or 6)
 
     # Рефанд для traffic_purchase: если прошло > 30 мин с создания job
     # и гигабайты не начислены — вернуть деньги на баланс, уведомить пользователя
