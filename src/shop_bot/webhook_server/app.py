@@ -2747,7 +2747,7 @@ def create_webhook_app(bot_controller_instance):
             backups = []
 
         common_data = get_common_template_data()
-        return render_template('settings.html', hosts=hosts, ssh_targets=ssh_targets, backups=backups, pay_info=pay_info, **common_data)
+        return render_template('settings.html', hosts=hosts, ssh_targets=ssh_targets, backups=backups, pay_info=pay_info, all_hosts=hosts, **common_data)
 
 
     @flask_app.route('/api/settings/update-pay-info', methods=['POST'])
@@ -3573,6 +3573,67 @@ def create_webhook_app(bot_controller_instance):
     def hybrid_migration_status_route():
         from shop_bot.modules import hybrid_migration
         return jsonify({'ok': True, 'state': hybrid_migration.get_migration_state()})
+
+    # ===== ПЕРЕНОС КЛЮЧЕЙ МЕЖДУ ХОСТАМИ (server migration) =====
+
+    @flask_app.route('/server-migration/start', methods=['POST'])
+    @login_required
+    def server_migration_start_route():
+        from shop_bot.modules import server_migration
+        source_host = (request.form.get('source_host') or '').strip()
+        target_host = (request.form.get('target_host') or '').strip()
+        mode = (request.form.get('mode') or 'all').strip()
+        telegram_id_raw = (request.form.get('telegram_id') or '').strip()
+        key_ids_raw = (request.form.get('key_ids') or '').strip()
+        role = (request.form.get('role') or 'wifi').strip()
+        if not source_host or not target_host:
+            return jsonify({'ok': False, 'error': 'source_host и target_host обязательны'}), 400
+        if source_host == target_host:
+            return jsonify({'ok': False, 'error': 'source и target должны различаться'}), 400
+        if mode not in ('all', 'user', 'specific'):
+            return jsonify({'ok': False, 'error': 'mode: all | user | specific'}), 400
+        tid = None
+        if mode == 'user':
+            if not telegram_id_raw:
+                return jsonify({'ok': False, 'error': 'telegram_id обязателен для mode=user'}), 400
+            try:
+                tid = int(telegram_id_raw)
+            except ValueError:
+                from shop_bot.data_manager import database as db
+                u = db.get_user_by_username(telegram_id_raw)
+                if not u:
+                    return jsonify({'ok': False, 'error': 'пользователь не найден'}), 404
+                tid = int(u.get('telegram_id') or 0)
+        key_ids = None
+        if mode == 'specific':
+            try:
+                key_ids = [int(x) for x in key_ids_raw.split(',') if x.strip()]
+            except ValueError:
+                return jsonify({'ok': False, 'error': 'key_ids: список чисел через запятую'}), 400
+            if not key_ids:
+                return jsonify({'ok': False, 'error': 'key_ids пуст'}), 400
+        state = server_migration.start_migration(
+            source_host=source_host, target_host=target_host, mode=mode,
+            telegram_id=tid, key_ids=key_ids, role=role)
+        return jsonify({'ok': True, 'state': state})
+
+    @flask_app.route('/server-migration/pause', methods=['POST'])
+    @login_required
+    def server_migration_pause_route():
+        from shop_bot.modules import server_migration
+        return jsonify({'ok': True, 'state': server_migration.pause_migration()})
+
+    @flask_app.route('/server-migration/resume', methods=['POST'])
+    @login_required
+    def server_migration_resume_route():
+        from shop_bot.modules import server_migration
+        return jsonify({'ok': True, 'state': server_migration.resume_migration()})
+
+    @flask_app.route('/server-migration/status', methods=['GET'])
+    @login_required
+    def server_migration_status_route():
+        from shop_bot.modules import server_migration
+        return jsonify({'ok': True, 'state': server_migration.get_state()})
 
     @flask_app.route('/heleket-webhook', methods=['POST'])
     @csrf.exempt

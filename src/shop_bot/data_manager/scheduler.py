@@ -39,6 +39,7 @@ _last_traffic_reset_at: datetime | None = None
 _last_low_traffic_notify_at: datetime | None = None
 _last_hybrid_migration_at: datetime | None = None
 _last_pair_repair_at: datetime | None = None
+_last_server_migration_at: datetime | None = None
 
 def format_time_left(hours: int) -> str:
     if hours >= 24:
@@ -558,6 +559,11 @@ async def periodic_subscription_check(bot_controller: BotController):
             except Exception as e:
                 logger.error(f"Scheduler: Ошибка pair repair worker: {e}", exc_info=True)
 
+            try:
+                await _maybe_run_server_migration()
+            except Exception as e:
+                logger.error(f"Scheduler: Ошибка server migration batch: {e}", exc_info=True)
+
             await _maybe_run_periodic_speedtests()
 
 
@@ -751,6 +757,32 @@ async def _maybe_run_pair_repair():
                                pair.get("pair_id"))
         except Exception as exc:
             logger.error("Scheduler: pair repair — ошибка для пары %s: %s", pair.get("pair_id"), exc)
+
+
+async def _maybe_run_server_migration():
+    """Обработка переноса ключей между хостами (server migration).
+
+    state хранится в bot_settings; если миграция активна, scheduler вызывает
+    run_migration_batch() на каждом тике.
+    """
+    global _last_server_migration_at
+    now = get_msk_time()
+    if _last_server_migration_at and (now - _last_server_migration_at).total_seconds() < CHECK_INTERVAL_SECONDS:
+        return
+    _last_server_migration_at = now
+
+    from shop_bot.modules import server_migration
+    state = server_migration.get_state()
+    if not state.get("source_host") or state.get("paused"):
+        return
+
+    logger.info("Scheduler: запуск server migration batch (%s -> %s, offset=%s)",
+                state.get("source_host"), state.get("target_host"), state.get("offset"))
+    result = await server_migration.run_migration_batch()
+    logger.info("Scheduler: server migration batch — %s", result)
+
+    if result.get("done"):
+        logger.info("Scheduler: server migration завершена")
 
 
 async def _maybe_run_periodic_speedtests():

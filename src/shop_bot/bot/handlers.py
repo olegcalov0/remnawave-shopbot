@@ -1090,36 +1090,45 @@ def get_user_router() -> Router:
     async def create_stars_invoice_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Подготовлю счёт в Telegram Stars...")
         data = await state.get_data()
-        plan = get_plan_by_id(data.get('plan_id'))
-        if not plan:
-            await smart_edit_message(callback.message, "❌ Ошибка: Тариф не найден в системе.")
-            await state.clear()
-            return
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan = get_plan_by_id(data.get('plan_id'))
+            if not plan:
+                await smart_edit_message(callback.message, "❌ Ошибка: Тариф не найден в системе.")
+                await state.clear()
+                return
 
         user_id, user_data = callback.from_user.id, get_user(callback.from_user.id)
-        price_rub = Decimal(str(data.get('final_price', plan['price'])))
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
 
         try:
             stars_ratio_raw = get_setting("stars_per_rub") or '0'
             stars_ratio = Decimal(stars_ratio_raw)
         except Exception: stars_ratio = Decimal('0')
-        
+
         if stars_ratio <= 0:
             await smart_edit_message(callback.message, "⚠️ Оплата через Telegram Stars временно недоступна.")
             await state.clear()
             return
 
         stars_amount = max(1, int((price_rub * stars_ratio).quantize(Decimal('1'), rounding=ROUND_HALF_UP)))
-        months = int(plan['months'])
-        
+        months = int(plan['months']) if plan else 0
+
         try:
-            payment_id, _ = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Telegram Stars", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
-            logger.info(f"Оплата (Stars): пользователь {user_id}, план {data.get('plan_id')}, сумма {price_rub} RUB")
-            description_str = get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
-            title = f"{'Подписка' if data.get('action') == 'new' else 'Продление'} на {months} мес."
-            
+            if _is_traffic:
+                payment_id, meta = await _create_traffic_draft(state, user_id)
+                if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                meta["payment_method"] = "Telegram Stars"
+                create_payload_pending(payment_id, user_id, float(price_rub), meta)
+            else:
+                payment_id, _ = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Telegram Stars", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
+            logger.info(f"Оплата (Stars): пользователь {user_id}, сумма {price_rub} RUB")
+            description_str = "Докупка трафика" if _is_traffic else get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
+            title = "Докупка трафика" if _is_traffic else f"{'Подписка' if data.get('action') == 'new' else 'Продление'} на {months} мес."
+
             await callback.message.answer_invoice(title=title, description=description_str, prices=[LabeledPrice(label=title, amount=stars_amount)], payload=payment_id, currency="XTR")
-            logger.info(f"Stars: Инвойс на подписку для пользователя {user_id} отправлен (сумма в Stars: {stars_amount})")
+            logger.info(f"Stars: Инвойс для пользователя {user_id} отправлен (сумма в Stars: {stars_amount})")
             await state.clear()
         except Exception as e:
             logger.error(f"Stars: Не удалось создать счет для {user_id}: {e}")
@@ -1242,14 +1251,19 @@ def get_user_router() -> Router:
     async def pay_yoomoney_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Подготовка YooMoney...")
         data = await state.get_data()
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
         plan_id = data.get('plan_id')
-        plan = get_plan_by_id(plan_id)
-        if not plan:
-            logger.error(f"YooMoney: Неверный тариф ID={plan_id}")
-            await callback.message.answer("❌ Тариф не найден. Выберите другой.")
-            await state.clear()
-            return
-            
+        months = 0
+        if not _is_traffic:
+            plan = get_plan_by_id(plan_id)
+            if not plan:
+                logger.error(f"YooMoney: Неверный тариф ID={plan_id}")
+                await callback.message.answer("❌ Тариф не найден. Выберите другой.")
+                await state.clear()
+                return
+            months = int(plan['months'])
+
         wallet, secret = get_setting("yoomoney_wallet"), get_setting("yoomoney_secret")
         if not wallet or not secret:
             await smart_edit_message(callback.message, "⚠️ YooMoney временно отключен.")
@@ -1261,24 +1275,31 @@ def get_user_router() -> Router:
             await smart_edit_message(callback.message, "❌ Ошибка конфигурации YooMoney. Обратитесь к администратору.")
             await state.clear()
             return
-            
+
         user_data = get_user(callback.from_user.id)
-        price_rub = Decimal(str(data.get('final_price', plan['price'])))
-        logger.info(f"Оплата (YooMoney): пользователь {callback.from_user.id}, план {plan_id}, сумма {price_rub} RUB, действие {data.get('action')}")
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        logger.info(f"Оплата (YooMoney): пользователь {callback.from_user.id}, сумма {price_rub} RUB, действие {data.get('action')}")
 
         if price_rub < Decimal("1.00"):
-            await smart_edit_message(callback.message, "❌ Минимум для YooMoney — 1 RUB. Выберите другой тариф.")
+            await smart_edit_message(callback.message, "❌ Минимум для YooMoney — 1 RUB.")
             await state.clear()
             return
-            
-        user_id, months = callback.from_user.id, int(plan['months'])
-        payment_id, _ = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="YooMoney", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
-        description_str = get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
+
+        user_id = callback.from_user.id
+        if _is_traffic:
+            payment_id, meta = await _create_traffic_draft(state, user_id)
+            if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+            meta["payment_method"] = "YooMoney"
+            create_payload_pending(payment_id, user_id, float(price_rub), meta)
+        else:
+            payment_id, _ = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="YooMoney", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
+        description_str = "Докупка трафика" if _is_traffic else get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
         pay_url = _build_yoomoney_link(wallet, price_rub, payment_id, description_str)
         payment_image = get_setting("payment_image")
-        
+
         await smart_edit_message(callback.message, "💳 <b>Оплата через YooMoney</b>\nНажмите на кнопку ниже для оплаты через кошелёк:", get_payment_keyboard("YooMoney", pay_url, invoice_id=payment_id, back_callback="back_to_payment_options"), payment_image)
-        logger.info(f"YooMoney: Ссылка на оплату подписки для пользователя {user_id} сформирована.")
+        logger.info(f"YooMoney: Ссылка на оплату для пользователя {user_id} сформирована.")
+        await state.clear()
     # ===== Конец функции pay_yoomoney_handler =====
 
     # ===== ПОПОЛНЕНИЕ БАЛАНСА ЧЕРЕЗ YOOMONEY =====
@@ -1384,32 +1405,40 @@ def get_user_router() -> Router:
     async def pay_heleket_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Создание счета Heleket...")
         data = await state.get_data()
-        plan_id = data.get('plan_id')
-        if not plan_id:
-            logger.error(f"Heleket: Отсутствует plan_id для {callback.from_user.id}")
-            await smart_edit_message(callback.message, "❌ Ошибка: Тариф не определен.")
-            await state.clear()
-            return
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        months = 0
+        if not _is_traffic:
+            plan_id = data.get('plan_id')
+            if not plan_id:
+                await smart_edit_message(callback.message, "❌ Ошибка: Тариф не определен.")
+                await state.clear()
+                return
+            plan = get_plan_by_id(plan_id)
+            if not plan:
+                await smart_edit_message(callback.message, "❌ Тариф не найден в базе.")
+                await state.clear()
+                return
+            months = int(plan['months'])
 
-        plan = get_plan_by_id(plan_id)
-        if not plan:
-            logger.error(f"Heleket: Тариф ID {plan_id} не найден.")
-            await smart_edit_message(callback.message, "❌ Тариф не найден в базе.")
-            await state.clear()
-            return
-            
-        user_id, user_data = callback.from_user.id, get_user(callback.from_user.id)
-        price_rub, months = Decimal(str(data.get('final_price', plan['price']))), int(plan['months'])
-        logger.info(f"Оплата (Heleket): пользователь {user_id}, план {plan_id}, сумма {price_rub} RUB, действие {data.get('action')}")
-        
+        user_id = callback.from_user.id
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        logger.info(f"Оплата (Heleket): пользователь {user_id}, сумма {price_rub} RUB, действие {data.get('action')}")
+
         try:
-            payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Heleket", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
+            if _is_traffic:
+                payment_id, metadata = await _create_traffic_draft(state, user_id)
+                if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                metadata["payment_method"] = "Heleket"
+                create_payload_pending(payment_id, user_id, float(price_rub), metadata)
+            else:
+                payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Heleket", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
             pay_url = await create_heleket_payment_request(payment_id=payment_id, price=float(price_rub), metadata=metadata)
 
             if pay_url:
                 payment_image = get_setting("payment_image")
                 logger.info(f"Heleket: Ссылка на оплату для пользователя {user_id} получена.")
-                await smart_edit_message(callback.message, "💎 <b>Оплата через Heleket</b>\nНажмите на кнопку ниже для оплаты криптовалютой:", get_payment_keyboard("Heleket", pay_url), payment_image)
+                await smart_edit_message(callback.message, "💎 <b>Оплата через Heleket</b>\nНажмите на кнопку ниже для оплаты криптовалютой:", get_payment_keyboard("Heleket", pay_url, back_callback="back_to_payment_options"), payment_image)
                 await state.clear()
             else:
                 logger.warning(f"Heleket: Не удалось получить ссылку для пользователя {user_id}.")
@@ -1427,42 +1456,49 @@ def get_user_router() -> Router:
     async def pay_platega_payform_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Генерация ссылки Platega...")
         data = await state.get_data()
-        plan_id = data.get('plan_id')
-        
-        if not plan_id:
-            logger.error(f"Platega Payform: Отсутствует plan_id для {callback.from_user.id}")
-            await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
-            await state.clear()
-            return
-        
-        plan = get_plan_by_id(plan_id)
-        if not plan:
-            logger.error(f"Platega Payform: Тариф {plan_id} не найден.")
-            await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
-            await state.clear()
-            return
-        
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan_id = data.get('plan_id')
+            if not plan_id:
+                await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
+                await state.clear()
+                return
+            plan = get_plan_by_id(plan_id)
+            if not plan:
+                await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
+                await state.clear()
+                return
+
         merchant_id, api_key = get_setting("platega_merchant_id"), get_setting("platega_api_key")
         if not merchant_id or not api_key:
             await smart_edit_message(callback.message, "⚠️ Сервис Platega временно отключен.")
             await state.clear()
             return
-            
-        user_id, user_data = callback.from_user.id, get_user(callback.from_user.id)
-        price_rub, months = Decimal(str(data.get('final_price', plan['price']))), int(plan['months'])
-        logger.info(f"Оплата (Platega Payform): пользователь {user_id}, план {plan_id}, сумма {price_rub} RUB, действие {data.get('action')}")
-        
+
+        user_id = callback.from_user.id
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        months = int(plan['months']) if plan else 0
+        logger.info(f"Оплата (Platega Payform): пользователь {user_id}, сумма {price_rub} RUB, действие {data.get('action')}")
+
         try:
-            payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega Payform", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
+            if _is_traffic:
+                payment_id, metadata = await _create_traffic_draft(state, user_id)
+                if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                metadata["payment_method"] = "Platega Payform"
+                create_payload_pending(payment_id, user_id, float(price_rub), metadata)
+            else:
+                payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega Payform", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
             platega = PlategaAPI(merchant_id, api_key)
-            description_str = get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
+            description_str = "Докупка трафика" if _is_traffic else get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
 
             _, payment_url = await platega.create_payment_payform(amount=float(price_rub), description=description_str, payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}")
-            
+
             if payment_url:
                 payment_image = get_setting("payment_image")
                 logger.info(f"Platega Payform: Ссылка на оплату для пользователя {user_id} сформирована.")
                 await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите на кнопку ниже для перехода к оплате:", get_payment_keyboard("Platega", payment_url, back_callback="back_to_payment_options"), payment_image)
+                await state.clear()
             else:
                 logger.warning(f"Platega Payform: Ошибка генерации ссылки для пользователя {user_id}.")
                 await smart_edit_message(callback.message, "❌ Не удалось создать ссылку Platega. Выберите другой метод.")
@@ -1480,42 +1516,51 @@ def get_user_router() -> Router:
     async def pay_platega_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Генерация ссылки СБП...")
         data = await state.get_data()
-        plan_id = data.get('plan_id')
-        
-        if not plan_id:
-            logger.error(f"Platega: Отсутствует plan_id для {callback.from_user.id}")
-            await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
-            await state.clear()
-            return
-        
-        plan = get_plan_by_id(plan_id)
-        if not plan:
-            logger.error(f"Platega: Тариф {plan_id} не найден.")
-            await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
-            await state.clear()
-            return
-        
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan_id = data.get('plan_id')
+            if not plan_id:
+                logger.error(f"Platega: Отсутствует plan_id для {callback.from_user.id}")
+                await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
+                await state.clear()
+                return
+            plan = get_plan_by_id(plan_id)
+            if not plan:
+                logger.error(f"Platega: Тариф {plan_id} не найден.")
+                await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
+                await state.clear()
+                return
+
         merchant_id, api_key = get_setting("platega_merchant_id"), get_setting("platega_api_key")
         if not merchant_id or not api_key:
             await smart_edit_message(callback.message, "⚠️ Сервис Platega временно отключен.")
             await state.clear()
             return
-            
-        user_id, user_data = callback.from_user.id, get_user(callback.from_user.id)
-        price_rub, months = Decimal(str(data.get('final_price', plan['price']))), int(plan['months'])
-        logger.info(f"Оплата (Platega): пользователь {user_id}, план {plan_id}, сумма {price_rub} RUB, действие {data.get('action')}")
-        
+
+        user_id = callback.from_user.id
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        months = int(plan['months']) if plan else 0
+        logger.info(f"Оплата (Platega): пользователь {user_id}, сумма {price_rub} RUB, действие {data.get('action')}")
+
         try:
-            payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
+            if _is_traffic:
+                payment_id, metadata = await _create_traffic_draft(state, user_id)
+                if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                metadata["payment_method"] = "Platega"
+                create_payload_pending(payment_id, user_id, float(price_rub), metadata)
+            else:
+                payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
             platega = PlategaAPI(merchant_id, api_key)
-            description_str = get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
+            description_str = "Докупка трафика" if _is_traffic else get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
 
             _, payment_url = await platega.create_payment(amount=float(price_rub), description=description_str, payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", payment_method=2)
-            
+
             if payment_url:
                 payment_image = get_setting("payment_image")
                 logger.info(f"Platega: Ссылка на оплату СБП для пользователя {user_id} сформирована.")
                 await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите на кнопку ниже для оплаты через СБП:", get_payment_keyboard("Platega", payment_url, back_callback="back_to_payment_options"), payment_image)
+                await state.clear()
             else:
                 logger.warning(f"Platega: Ошибка генерации ссылки для пользователя {user_id}.")
                 await smart_edit_message(callback.message, "❌ Не удалось создать ссылку СБП. Выберите другой метод.")
@@ -1532,41 +1577,50 @@ def get_user_router() -> Router:
     async def pay_platega_crypto_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Генерация ссылки на крипту...")
         data = await state.get_data()
-        plan_id = data.get('plan_id')
-        
-        if not plan_id:
-            logger.error(f"Platega Crypto: Отсутствует plan_id для {callback.fromuser.id}")
-            await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
-            await state.clear()
-            return
-        
-        plan = get_plan_by_id(plan_id)
-        if not plan:
-            logger.error(f"Platega Crypto: Тариф {plan_id} не найден.")
-            await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
-            await state.clear()
-            return
-        
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan_id = data.get('plan_id')
+            if not plan_id:
+                logger.error(f"Platega Crypto: Отсутствует plan_id для {callback.from_user.id}")
+                await smart_edit_message(callback.message, "❌ Ошибка: Тариф не выбран.")
+                await state.clear()
+                return
+            plan = get_plan_by_id(plan_id)
+            if not plan:
+                logger.error(f"Platega Crypto: Тариф {plan_id} не найден.")
+                await smart_edit_message(callback.message, "❌ Выбранный тариф недоступен.")
+                await state.clear()
+                return
+
         merchant_id, api_key = get_setting("platega_merchant_id"), get_setting("platega_api_key")
         if not merchant_id or not api_key:
             await smart_edit_message(callback.message, "⚠️ Сервис Platega временно отключен.")
             await state.clear()
             return
-            
-        user_id, user_data = callback.from_user.id, get_user(callback.from_user.id)
-        price_rub, months = Decimal(str(data.get('final_price', plan['price']))), int(plan['months'])
-        logger.info(f"Оплата (Platega Crypto): пользователь {user_id}, план {plan_id}, сумма {price_rub} RUB, действие {data.get('action')}")
-        
+
+        user_id = callback.from_user.id
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        months = int(plan['months']) if plan else 0
+        logger.info(f"Оплата (Platega Crypto): пользователь {user_id}, сумма {price_rub} RUB, действие {data.get('action')}")
+
         try:
-            payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega Crypto", action=data.get('action'), metadata_source=data, plan_id=plan_id, months=months)
+            if _is_traffic:
+                payment_id, metadata = await _create_traffic_draft(state, user_id)
+                if not payment_id: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                metadata["payment_method"] = "Platega Crypto"
+                create_payload_pending(payment_id, user_id, float(price_rub), metadata)
+            else:
+                payment_id, metadata = await create_pending_payment(user_id=user_id, amount=float(price_rub), payment_method="Platega Crypto", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
             platega = PlategaAPI(merchant_id, api_key)
-            description_str = get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
+            description_str = "Докупка трафика" if _is_traffic else get_transaction_comment(callback.from_user, 'new' if data.get('action') == 'new' else 'extend', months, data.get('host_name'))
 
             _, payment_url = await platega.create_payment(amount=float(price_rub), description=description_str, payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", payment_method=13)
-            
+
             if payment_url:
                 payment_image = get_setting("payment_image")
                 await smart_edit_message(callback.message, "🪙 <b>Оплата через Platega Crypto</b>\nНажмите на кнопку ниже для оплаты криптовалютой:", get_payment_keyboard("Platega", payment_url, back_callback="back_to_payment_options"), payment_image)
+                await state.clear()
             else:
                 await smart_edit_message(callback.message, "❌ Не удалось создать ссылку на крипту. Выберите другой метод.")
                 await state.clear()
@@ -2147,7 +2201,43 @@ def get_user_router() -> Router:
 
             trial_traffic, trial_hwid = int(get_setting("trial_traffic_limit_gb") or 0), int(get_setting("trial_hwid_limit") or 0)
             trial_internal_squad_uuid = (get_setting("trial_internal_squad_uuid") or "").strip() or None
-            result = await remnawave_api.create_or_update_key_on_host(host_name=host_name, email=candidate_email, days_to_add=int(get_setting("trial_duration_days")), telegram_id=user_id, traffic_limit_gb=trial_traffic if trial_traffic > 0 else None, hwid_limit=trial_hwid if trial_hwid > 0 else None, internal_squad_uuid=trial_internal_squad_uuid)
+
+            from shop_bot.data_manager import traffic_repository as tr_repo
+            from shop_bot.modules import hybrid_service as _hs
+            from shop_bot.modules import utils_common as _uc
+            _host_hybrid = tr_repo.get_host_hybrid_settings(host_name) or {}
+            _hybrid_on = int(_host_hybrid.get("hybrid_enabled") or 0) == 1
+
+            if _hybrid_on:
+                _expire_dt = _uc.get_msk_time() + timedelta(days=int(get_setting("trial_duration_days") or 3))
+                try:
+                    _primary_payload = await _hs.create_hybrid_subscription(
+                        host_name=host_name, user_id=user_id, telegram_id=user_id,
+                        telegram_username=user_data.get('username'),
+                        expire_at=_expire_dt,
+                        base_traffic_limit_bytes=_uc.gb_to_bytes(trial_traffic) if trial_traffic > 0 else None,
+                        hybrid_traffic_limit_bytes=_uc.gb_to_bytes(int(_host_hybrid.get("hybrid_traffic_limit_gb") or 0)) if _host_hybrid.get("hybrid_traffic_limit_gb") else None,
+                        base_hwid_limit=trial_hwid if trial_hwid > 0 else None,
+                        hybrid_hwid_limit=int(_host_hybrid.get("hybrid_hwid_limit") or 0) if _host_hybrid.get("hybrid_hwid_limit") else None,
+                        traffic_limit_strategy=_host_hybrid.get("traffic_limit_strategy") or "NO_RESET",
+                        primary_email=candidate_email,
+                    )
+                    result = {
+                        'client_uuid': _primary_payload.get('id'),
+                        'short_uuid': _primary_payload.get('shortUuid'),
+                        'email': candidate_email, 'host_name': host_name,
+                        'squad_uuid': _host_hybrid.get("squad_uuid") or '',
+                        'subscription_url': remnawave_api.extract_subscription_url(_primary_payload) or '',
+                        'traffic_limit_bytes': _primary_payload.get('trafficLimitBytes'),
+                        'traffic_limit_strategy': _primary_payload.get('trafficLimitStrategy'),
+                        'expiry_timestamp_ms': int(_expire_dt.timestamp() * 1000),
+                        'connection_string': remnawave_api.extract_subscription_url(_primary_payload) or '',
+                    } if _primary_payload else None
+                except _hs.HybridCreationError as exc:
+                    logger.error("Trial hybrid: ошибка создания пары для %s: %s", user_id, exc)
+                    result = None
+            else:
+                result = await remnawave_api.create_or_update_key_on_host(host_name=host_name, email=candidate_email, days_to_add=int(get_setting("trial_duration_days")), telegram_id=user_id, traffic_limit_gb=trial_traffic if trial_traffic > 0 else None, hwid_limit=trial_hwid if trial_hwid > 0 else None, internal_squad_uuid=trial_internal_squad_uuid)
             
             if not result:
                 await smart_edit_message(message, "❌ <b>Ошибка сервера</b>\nНе удалось сгенерировать конфигурацию. Попробуйте выбрать другой сервер.")
@@ -2529,7 +2619,8 @@ def get_user_router() -> Router:
         # сохраняем расчёт в state, payment_id/draft создадим при выборе метода
         await state.update_data(
             pricing=pricing, source_kind="package" if package else "custom",
-            host_name=host_name, non_burnable=non_burnable)
+            host_name=host_name, non_burnable=non_burnable,
+            action="traffic_purchase", final_price=float(pricing['payable_rub']))
 
         text = (f"✅ <b>Подтверждение покупки</b>\n\n"
                 f"Тип: <b>{name}</b>\n"
@@ -2540,9 +2631,14 @@ def get_user_router() -> Router:
 
         from shop_bot.data_manager.database import get_balance
         balance = get_balance(callback.from_user.id)
-        kb_data = {'balance': balance, 'key_id': key_id, 'traffic_type': traffic_type}
-        await smart_edit_message(callback.message, text, keyboards.create_traffic_payment_method_keyboard(kb_data))
-        await state.set_state(TrafficPurchaseProcess.waiting_for_confirm)
+        price = float(pricing['payable_rub'])
+        kb = keyboards.create_payment_method_keyboard(
+            PAYMENT_METHODS, action="traffic_purchase",
+            key_id=key_id, show_balance=(balance >= price),
+            main_balance=balance, price=price,
+            back_callback=f"traffic_type_{key_id}_{traffic_type}")
+        await smart_edit_message(callback.message, text, kb, get_setting("payment_method_image"))
+        await state.set_state(PaymentProcess.waiting_for_payment_method)
 
     # Вспомогательная функция создания драфта перед оплатой
     async def _create_traffic_draft(state: FSMContext, user_id: int):
@@ -2574,226 +2670,6 @@ def get_user_router() -> Router:
             return None, None
         return payment_id, draft_meta
 
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_balance")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_by_balance(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-        await callback.answer()
-        data = await state.get_data()
-        pricing = data.get("pricing")
-        price = float(pricing["payable_rub"])
-        
-        from shop_bot.data_manager.database import get_balance
-        balance = get_balance(callback.fromuser.id) if False else get_balance(callback.from_user.id)
-        if balance < price:
-            return await callback.answer(f"🚫 Недостаточно средств: {balance:.2f} / {price:.2f} ₽", show_alert=True)
-
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return await callback.answer("⚠️ Ошибка создания счёта.", show_alert=True)
-
-        from shop_bot.data_manager.remnawave_repository import deduct_from_balance
-        if not deduct_from_balance(callback.from_user.id, price):
-            return await callback.answer("⚠️ Ошибка списания баланса.", show_alert=True)
-            
-        tr_repo.transition_purchase_status(payment_id, (const.PURCHASE_CREATED,), const.PURCHASE_PAID)
-        meta["payment_method"] = "Balance"
-        
-        from shop_bot.modules import fulfillment as ff
-        ff.confirm_payment_and_enqueue("Balance", payment_id, meta)
-        await smart_edit_message(callback.message, "✅ <b>Оплата принята!</b>\nГигабайты начисляются. Вы получите уведомление.", keyboards.create_back_to_menu_keyboard())
-        await state.clear()
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yookassa")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_yookassa(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        shop_id, secret = get_setting("yookassa_shop_id"), get_setting("yookassa_secret_key")
-        if not shop_id or not secret: return await callback.message.answer("⚠️ Оплата через ЮKassa временно недоступна.")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "YooKassa"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        try:
-            payload = {
-                "amount": {"value": f"{meta['price']:.2f}", "currency": "RUB"},
-                "confirmation": {"type": "redirect", "return_url": f"https://t.me/{TELEGRAM_BOT_USERNAME}"},
-                "capture": True,
-                "description": "Докупка трафика",
-                "metadata": meta
-            }
-            email = get_setting("receipt_email")
-            if email and is_valid_email(email):
-                payload['receipt'] = {
-                    "customer": {"email": email},
-                    "items": [{"description": "Докупка трафика", "quantity": "1.00", "amount": {"value": f"{meta['price']:.2f}", "currency": "RUB"}, "vat_code": "1", "payment_subject": "service", "payment_mode": "full_payment"}]
-                }
-            pay_obj = await create_yookassa_payment_async(payload, payment_id, shop_id, secret)
-            await smart_edit_message(callback.message, "💳 <b>Оплата картой / СБП</b>\nНажмите кнопку ниже для перехода к оплате:", keyboards.create_payment_keyboard("YooKassa", pay_obj["confirmation"]["confirmation_url"], back_callback="show_profile"), get_setting("payment_image"))
-            await state.clear()
-        except Exception as e:
-            logger.error(f"traffic_pay_yookassa Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при создании платежа ЮKassa.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_cryptobot")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_cryptobot(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "CryptoBot"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        try:
-            # Для CryptoBot в оригинале используется хитрая строка, но достаточно передать payment_id:
-            res = await create_cryptobot_api_invoice(amount=meta["price"], payload_str=payment_id)
-            if res:
-                await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой</b>\nНажмите кнопку ниже:", keyboards.create_cryptobot_payment_keyboard(res[0], res[1], back_callback="show_profile"), get_setting("payment_image"))
-                await state.clear()
-            else:
-                await callback.message.answer("❌ Ошибка CryptoBot API.")
-        except Exception as e:
-            logger.error(f"traffic_pay_cryptobot Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при создании платежа CryptoBot.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_heleket")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_heleket(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "Heleket"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        try:
-            pay_url = await create_heleket_payment_request(payment_id=payment_id, price=meta["price"], metadata=meta)
-            if pay_url:
-                await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой (Heleket)</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard("Heleket", pay_url, back_callback="show_profile"), get_setting("payment_image"))
-                await state.clear()
-            else:
-                await callback.message.answer("❌ Ошибка при создании платежа Heleket.")
-        except Exception as e:
-            logger.error(f"traffic_pay_heleket Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при создании платежа Heleket.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_tonconnect")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_tonconnect(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        wallet = get_setting("ton_wallet_address")
-        if not wallet: return await callback.message.answer("❌ Оплата через TON временно недоступна.")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "TON Connect"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        try:
-            from shop_bot.bot.handlers import get_usdt_rub_rate, get_ton_usdt_rate, _start_ton_connect_process
-            import qrcode
-            from io import BytesIO
-            
-            price_rub = Decimal(str(meta["price"]))
-            rt_usdt, rt_ton = await get_usdt_rub_rate(), await get_ton_usdt_rate()
-            if not rt_usdt or not rt_ton: return await smart_edit_message(callback.message, "❌ Не удалось получить актуальный курс TON.")
-            
-            price_ton = (price_rub / rt_usdt / rt_ton).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-            
-            conn_url = await _start_ton_connect_process(callback.from_user.id, {'messages': [{'address': wallet, 'amount': str(int(price_ton * 10**9)), 'payload': payment_id}], 'valid_until': int(uc.get_msk_time().timestamp()) + 600})
-            
-            bio = BytesIO(); qrcode.make(conn_url).save(bio, "PNG"); bio.seek(0)
-            await callback.message.delete()
-            await callback.message.answer_photo(
-                photo=BufferedInputFile(bio.getvalue(), "ton_qr.png"), 
-                caption=f"🪙 <b>Оплата через TON Connect</b>\n\nСумма: <code>{price_ton}</code> <b>TON</b>\n\n1. На мобильном: нажмите <b>«Открыть кошелек»</b>\n2. На ПК: отсканируйте <b>QR-код</b>\n\nПосле оплаты транзакция подтвердится автоматически.", 
-                reply_markup=keyboards.create_ton_connect_keyboard(conn_url, back_callback="show_profile")
-            )
-            await state.clear()
-        except Exception as e:
-            logger.error(f"traffic_pay_tonconnect Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка TON Connect.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_stars")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_stars(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-        await callback.answer("⏳ Создание счета...")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "Telegram Stars"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        stars_amount = int(meta["price"] * float(get_setting("stars_per_rub") or 1.0))
-        from aiogram.types import LabeledPrice
-        prices = [LabeledPrice(label="Докупка трафика", amount=stars_amount)]
-        try:
-            await bot.send_invoice(callback.from_user.id, title="Докупка трафика", description="Покупка пакета гигабайтов", payload=payment_id, provider_token="", currency="XTR", prices=prices)
-            await state.clear()
-        except Exception as e:
-            logger.error(f"Stars invoice error: {e}")
-            await callback.message.answer("❌ Ошибка отправки инвойса Telegram Stars.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yoomoney")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_yoomoney(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        wallet = get_setting("yoomoney_wallet")
-        if not wallet:
-            return await callback.message.answer("⚠️ Оплата через ЮMoney временно недоступна.")
-        w = (wallet or "").strip()
-        if not (w.isdigit() and len(w) >= 11):
-            return await callback.message.answer("❌ Ошибка конфигурации ЮMoney. Обратитесь к администратору.")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id:
-            return await callback.message.answer("⚠️ Ошибка создания счёта.")
-        meta["payment_method"] = "YooMoney"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        try:
-            price_rub = Decimal(str(meta["price"]))
-            if price_rub < Decimal("1.00"):
-                return await callback.message.answer("❌ Минимум для ЮMoney — 1 ₽.")
-            pay_url = _build_yoomoney_link(wallet, price_rub, payment_id, "Докупка трафика")
-            await smart_edit_message(callback.message, "💜 <b>Оплата через ЮMoney</b>\nНажмите на кнопку ниже для оплаты через кошелёк:", keyboards.create_payment_keyboard("YooMoney", pay_url, back_callback="show_profile"), get_setting("payment_image"))
-            await state.clear()
-        except Exception as e:
-            logger.error(f"traffic_pay_yoomoney Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при создании платежа ЮMoney.")
-
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data.startswith("traffic_pay_platega"))
-    @anti_spam
-    @registration_required
-    async def traffic_pay_platega(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        method_type = callback.data.replace("traffic_pay_platega", "")
-        if method_type == "_crypto": method_id = 13
-        elif method_type == "_payform": method_id = None
-        else: method_id = 2
-        
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "Platega"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        try:
-            merchant_id, api_key = get_setting("platega_merchant_id"), get_setting("platega_api_key")
-            platega = PlategaAPI(merchant_id, api_key)
-            if method_id is None:
-                _, payment_url = await platega.create_payment_payform(amount=float(meta["price"]), description="Докупка трафика", payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}")
-            else:
-                _, payment_url = await platega.create_payment(amount=float(meta["price"]), description="Докупка трафика", payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", payment_method=method_id)
-            
-            if payment_url:
-                await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard("Platega", payment_url, back_callback="show_profile"), get_setting("payment_image"))
-                await state.clear()
-            else:
-                await callback.message.answer("❌ Ошибка при создании платежа Platega.")
-        except Exception as e:
-            logger.error(f"traffic_pay_platega Ошибка: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при создании платежа Platega.")
 
     # ===== НАЧАЛО ПЕРЕНОСА КЛЮЧА НА ДРУГОЙ СЕРВЕР =====
     # Предоставляет выбор доступных серверов для миграции текущего ключа
@@ -3498,23 +3374,34 @@ def get_user_router() -> Router:
         await callback.answer("⏳ Создание счета..."); data = await state.get_data()
         shop_id, secret = get_setting("yookassa_shop_id"), get_setting("yookassa_secret_key")
         if not shop_id or not secret: return await callback.message.answer("⚠️ Оплата через ЮKassa временно недоступна.")
-            
-        plan = get_plan_by_id(data.get('plan_id'))
-        if not plan: return await state.clear()
-            
-        price = Decimal(str(data.get('final_price', plan['price'])))
+
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan = get_plan_by_id(data.get('plan_id'))
+            if not plan: return await state.clear()
+
+        price = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
         email = data.get('customer_email') or get_setting("receipt_email")
 
         try:
-            pid, meta = await create_pending_payment(user_id=callback.from_user.id, amount=float(price), payment_method="YooKassa", action=data['action'], metadata_source=data, plan_id=plan['plan_id'], months=plan['months'])
-            logger.info(f"Оплата (YooKassa): пользователь {callback.from_user.id}, план {plan['plan_id']}, сумма {price} RUB")
-            comment = get_transaction_comment(callback.from_user, data['action'], plan['months'], data.get('host_name'))
-            
+            if _is_traffic:
+                pid, meta = await _create_traffic_draft(state, callback.from_user.id)
+                if not pid: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                meta["payment_method"] = "YooKassa"
+                create_payload_pending(pid, callback.from_user.id, float(price), meta)
+                comment = "Докупка трафика"
+            else:
+                pid, meta = await create_pending_payment(user_id=callback.from_user.id, amount=float(price), payment_method="YooKassa", action=data['action'], metadata_source=data, plan_id=plan['plan_id'], months=plan['months'])
+                comment = get_transaction_comment(callback.from_user, data['action'], plan['months'], data.get('host_name'))
+            logger.info(f"Оплата (YooKassa): пользователь {callback.from_user.id}, сумма {price} RUB")
+
             payload = {"amount": {"value": f"{price:.2f}", "currency": "RUB"}, "confirmation": {"type": "redirect", "return_url": f"https://t.me/{TELEGRAM_BOT_USERNAME}"}, "capture": True, "description": comment, "metadata": meta}
             if email and is_valid_email(email): payload['receipt'] = {"customer": {"email": email}, "items": [{"description": comment, "quantity": "1.00", "amount": {"value": f"{price:.2f}", "currency": "RUB"}, "vat_code": "1", "payment_subject": "service", "payment_mode": "full_payment"}]}
-            
+
             pay_obj = await create_yookassa_payment_async(payload, pid, shop_id, secret)
             await smart_edit_message(callback.message, "💳 <b>Оплата через ЮKassa</b>\nНажмите на кнопку ниже для оплаты картой или через СБП:", get_payment_keyboard("YooKassa", pay_obj["confirmation"]["confirmation_url"], back_callback="back_to_payment_options"), get_setting("payment_image"))
+            await state.clear()
         except Exception as e:
             logger.error(f"YooKassa Ошибка: {e}", exc_info=True)
             await callback.message.answer("⚠️ ЮKassa временно не отвечает или на стороне сервиса идут технические работы. Попробуйте позже или выберите другой способ оплаты."); await state.clear()
@@ -3525,19 +3412,29 @@ def get_user_router() -> Router:
     @anti_spam
     async def create_cryptobot_invoice_handler(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Создание инвойса..."); data = await state.get_data()
-        plan = get_plan_by_id(data.get('plan_id'))
-        if not plan: return await state.clear()
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan = get_plan_by_id(data.get('plan_id'))
+            if not plan: return await state.clear()
 
-        price = Decimal(str(data.get('final_price', plan['price'])))
+        price = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
         try:
-            pid, meta = await create_pending_payment(user_id=callback.from_user.id, amount=float(price), payment_method="CryptoBot", action=data['action'], metadata_source=data, plan_id=plan['plan_id'], months=plan['months'])
-            logger.info(f"Оплата (CryptoBot): пользователь {callback.from_user.id}, план {plan['plan_id']}, сумма {price} RUB")
-            
-            payload = ":".join([str(callback.from_user.id), str(plan['months']), f"{price:.2f}", str(data['action']), str(data.get('key_id') or "None"), str(data.get('host_name') or ""), str(plan['plan_id']), str(data.get('customer_email') or "None"), "CryptoBot", str(data.get('promo_code') or "None"), f"{data.get('promo_discount', 0):.2f}", str(data.get('tier_device_count') or 'None')])
-            res = await create_cryptobot_api_invoice(amount=float(price), payload_str=payload)
-            
+            if _is_traffic:
+                pid, meta = await _create_traffic_draft(state, callback.from_user.id)
+                if not pid: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                meta["payment_method"] = "CryptoBot"
+                create_payload_pending(pid, callback.from_user.id, float(price), meta)
+            else:
+                pid, meta = await create_pending_payment(user_id=callback.from_user.id, amount=float(price), payment_method="CryptoBot", action=data['action'], metadata_source=data, plan_id=plan['plan_id'], months=plan['months'])
+            logger.info(f"Оплата (CryptoBot): пользователь {callback.from_user.id}, сумма {price} RUB")
+
+            payload_str = pid if _is_traffic else ":".join([str(callback.from_user.id), str(plan['months']), f"{price:.2f}", str(data['action']), str(data.get('key_id') or "None"), str(data.get('host_name') or ""), str(plan['plan_id']), str(data.get('customer_email') or "None"), "CryptoBot", str(data.get('promo_code') or "None"), f"{data.get('promo_discount', 0):.2f}", str(data.get('tier_device_count') or 'None')])
+            res = await create_cryptobot_api_invoice(amount=float(price), payload_str=payload_str)
+
             if res:
                 await smart_edit_message(callback.message, "💎 <b>Оплата через CryptoBot</b>\nНажмите на кнопку ниже для оплаты криптовалютой:", keyboards.create_cryptobot_payment_keyboard(res[0], res[1], back_callback="back_to_payment_options"), get_setting("payment_image"))
+                await state.clear()
             else:
                 logger.error(f"CryptoBot: Ошибка создания платежа (пустой ответ API) для {callback.from_user.id}")
                 await callback.message.answer("❌ Ошибка CryptoBot API.")
@@ -3589,24 +3486,36 @@ def get_user_router() -> Router:
     @anti_spam
     async def create_ton_invoice_handler(callback: types.CallbackQuery, state: FSMContext):
         data = await state.get_data(); uid = callback.from_user.id
-        wallet, plan = get_setting("ton_wallet_address"), get_plan_by_id(data.get('plan_id'))
-        if not wallet or not plan: return await smart_edit_message(callback.message, "❌ Оплата через TON временно недоступна.")
+        wallet = get_setting("ton_wallet_address")
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        plan = None
+        if not _is_traffic:
+            plan = get_plan_by_id(data.get('plan_id'))
+        if not wallet or (not plan and not _is_traffic): return await smart_edit_message(callback.message, "❌ Оплата через TON временно недоступна.")
 
         await callback.answer("⏳ Подготовка TON Connect..."); user = get_user(uid)
-        price_rub, months = Decimal(str(data.get('final_price', plan['price']))), int(plan['months'])
+        price_rub = Decimal(str(data.get('final_price', plan['price'] if plan else 0)))
+        months = int(plan['months']) if plan else 0
         rt_usdt, rt_ton = await get_usdt_rub_rate(), await get_ton_usdt_rate()
 
         if not rt_usdt or not rt_ton: return await smart_edit_message(callback.message, "❌ Не удалось получить актуальный курс TON.")
-        
+
         price_ton = (price_rub / rt_usdt / rt_ton).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
         try:
-            pid, _ = await create_pending_payment(user_id=uid, amount=float(price_rub), payment_method="TON Connect", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
-            logger.info(f"Оплата (TON Connect): пользователь {uid}, план {data.get('plan_id')}, сумма {price_rub} RUB")
+            if _is_traffic:
+                pid, meta = await _create_traffic_draft(state, uid)
+                if not pid: return await callback.message.answer("⚠️ Ошибка создания счёта.")
+                meta["payment_method"] = "TON Connect"
+                create_payload_pending(pid, uid, float(price_rub), meta)
+            else:
+                pid, _ = await create_pending_payment(user_id=uid, amount=float(price_rub), payment_method="TON Connect", action=data.get('action'), metadata_source=data, plan_id=data.get('plan_id'), months=months)
+            logger.info(f"Оплата (TON Connect): пользователь {uid}, сумма {price_rub} RUB")
             conn_url = await _start_ton_connect_process(uid, {'messages': [{'address': wallet, 'amount': str(int(price_ton * 10**9)), 'payload': pid}], 'valid_until': int(get_msk_time().timestamp()) + 600})
-            
+
             bio = BytesIO(); qrcode.make(conn_url).save(bio, "PNG"); bio.seek(0)
             await callback.message.delete()
             await callback.message.answer_photo(photo=BufferedInputFile(bio.getvalue(), "ton_qr.png"), caption=f"💎 <b>Оплата через TON Connect</b>\n\nСумма: <code>{price_ton}</code> <b>TON</b>\n\n1. На мобильном: нажмите <b>«Открыть кошелек»</b>\n2. На ПК: отсканируйте <b>QR-код</b>\n\nПосле оплаты транзакция подтвердится автоматически.", reply_markup=keyboards.create_ton_connect_keyboard(conn_url, back_callback="back_to_payment_options"))
+            await state.clear()
         except Exception as e:
             logger.error(f"Ошибка TON Connect ({uid}): {e}")
             await callback.message.answer("⚠️ Ошибка генерации ссылки."); await state.clear()
@@ -3617,16 +3526,32 @@ def get_user_router() -> Router:
     @user_router.callback_query(PaymentProcess.waiting_for_payment_method, F.data == "pay_balance")
     @anti_spam
     async def pay_with_main_balance_handler(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
-        await callback.answer(); data = await state.get_data(); plan = get_plan_by_id(data.get('plan_id'))
-        if not plan: return await state.clear()
+        await callback.answer(); data = await state.get_data()
+        _is_traffic = data.get('action') == 'traffic_purchase'
+        price = float(data.get('final_price', 0))
+        if not _is_traffic:
+            plan = get_plan_by_id(data.get('plan_id'))
+            if not plan: return await state.clear()
+            price = float(data.get('final_price', plan['price']))
 
-        price = float(data.get('final_price', plan['price']))
-        logger.info(f"Оплата (Баланс): пользователь {callback.from_user.id}, план {plan['plan_id']}, сумма {price} RUB")
         if not deduct_from_balance(callback.from_user.id, price): return await callback.answer("⚖️ Недостаточно средств на балансе.", show_alert=True)
 
-        meta = {"user_id": callback.from_user.id, "months": int(plan['months']), "price": price, "action": data.get('action'), "key_id": data.get('key_id'), "host_name": data.get('host_name'), "plan_id": data.get('plan_id'), "customer_email": data.get('customer_email'), "payment_method": "Balance", "chat_id": callback.message.chat.id, "message_id": callback.message.message_id, "promo_code": (data.get('promo_code') or '').strip(), "promo_discount": float(data.get('promo_discount', 0)), "tier_device_count": data.get('tier_device_count'), "tier_price": data.get('tier_price', 0)}
-        logger.info(f"Оплата Баланс: Успешное списание {price} RUB с баланса пользователя {callback.from_user.id}")
-        await state.clear(); await process_successful_payment(bot, meta)
+        if _is_traffic:
+            payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
+            if not payment_id: return await callback.answer("⚠️ Ошибка создания счёта.", show_alert=True)
+            meta["payment_method"] = "Balance"
+            tr_repo.transition_purchase_status(payment_id, (const.PURCHASE_CREATED,), const.PURCHASE_PAID)
+            from shop_bot.modules import fulfillment as ff
+            ff.confirm_payment_and_enqueue("Balance", payment_id, meta)
+            logger.info(f"TRAFFIC: Оплата балансом для пользователя {callback.from_user.id}, сумма {price} RUB")
+            await smart_edit_message(callback.message, "✅ <b>Оплата принята!</b>\nГигабайты начисляются. Вы получите уведомление.", keyboards.create_back_to_menu_keyboard())
+            await state.clear()
+        else:
+            plan = get_plan_by_id(data.get('plan_id'))
+            logger.info(f"Оплата (Баланс): пользователь {callback.from_user.id}, план {plan['plan_id'] if plan else '?'}, сумма {price} RUB")
+            meta = {"user_id": callback.from_user.id, "months": int(plan['months']), "price": price, "action": data.get('action'), "key_id": data.get('key_id'), "host_name": data.get('host_name'), "plan_id": data.get('plan_id'), "customer_email": data.get('customer_email'), "payment_method": "Balance", "chat_id": callback.message.chat.id, "message_id": callback.message.message_id, "promo_code": (data.get('promo_code') or '').strip(), "promo_discount": float(data.get('promo_discount', 0)), "tier_device_count": data.get('tier_device_count'), "tier_price": data.get('tier_price', 0)}
+            logger.info(f"Оплата Баланс: Успешное списание {price} RUB с баланса пользователя {callback.from_user.id}")
+            await state.clear(); await process_successful_payment(bot, meta)
     # ===== Конец функции pay_with_main_balance_handler =====
 
     
