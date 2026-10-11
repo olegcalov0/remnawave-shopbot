@@ -2615,12 +2615,25 @@ def get_user_router() -> Router:
         meta["payment_method"] = "YooKassa"
         create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
         
-        from shop_bot.modules.yookassa_integration import create_yookassa_payment
-        payment_url = create_yookassa_payment(meta["price"], payment_id, f"Докупка трафика", shop_id, secret)
-        if payment_url:
-            await smart_edit_message(callback.message, "💳 <b>Оплата картой / СБП</b>\nНажмите кнопку ниже для перехода к оплате:", keyboards.create_payment_keyboard(payment_url))
+        try:
+            payload = {
+                "amount": {"value": f"{meta['price']:.2f}", "currency": "RUB"},
+                "confirmation": {"type": "redirect", "return_url": f"https://t.me/{TELEGRAM_BOT_USERNAME}"},
+                "capture": True,
+                "description": "Докупка трафика",
+                "metadata": meta
+            }
+            email = get_setting("receipt_email")
+            if email and is_valid_email(email):
+                payload['receipt'] = {
+                    "customer": {"email": email},
+                    "items": [{"description": "Докупка трафика", "quantity": "1.00", "amount": {"value": f"{meta['price']:.2f}", "currency": "RUB"}, "vat_code": "1", "payment_subject": "service", "payment_mode": "full_payment"}]
+                }
+            pay_obj = await create_yookassa_payment_async(payload, payment_id, shop_id, secret)
+            await smart_edit_message(callback.message, "💳 <b>Оплата картой / СБП</b>\nНажмите кнопку ниже для перехода к оплате:", keyboards.create_payment_keyboard("YooKassa", pay_obj["confirmation"]["confirmation_url"], back_callback="show_profile"), get_setting("payment_image"))
             await state.clear()
-        else:
+        except Exception as e:
+            logger.error(f"traffic_pay_yookassa Ошибка: {e}", exc_info=True)
             await callback.message.answer("❌ Ошибка при создании платежа ЮKassa.")
 
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_cryptobot")
@@ -2633,12 +2646,16 @@ def get_user_router() -> Router:
         meta["payment_method"] = "CryptoBot"
         create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
         
-        from shop_bot.modules.cryptobot_integration import create_crypto_invoice
-        invoice = await create_crypto_invoice(meta["price"], get_setting("cryptobot_token"), payment_id)
-        if invoice:
-            await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой</b>\nНажмите кнопку ниже:", keyboards.create_cryptobot_payment_keyboard(invoice.bot_invoice_url, invoice.invoice_id))
-            await state.clear()
-        else:
+        try:
+            # Для CryptoBot в оригинале используется хитрая строка, но достаточно передать payment_id:
+            res = await create_cryptobot_api_invoice(amount=meta["price"], payload_str=payment_id)
+            if res:
+                await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой</b>\nНажмите кнопку ниже:", keyboards.create_cryptobot_payment_keyboard(res[0], res[1], back_callback="show_profile"), get_setting("payment_image"))
+                await state.clear()
+            else:
+                await callback.message.answer("❌ Ошибка CryptoBot API.")
+        except Exception as e:
+            logger.error(f"traffic_pay_cryptobot Ошибка: {e}", exc_info=True)
             await callback.message.answer("❌ Ошибка при создании платежа CryptoBot.")
 
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_heleket")
@@ -2651,12 +2668,15 @@ def get_user_router() -> Router:
         meta["payment_method"] = "Heleket"
         create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
         
-        from shop_bot.modules.heleket_integration import create_heleket_payment
-        payment_url = await create_heleket_payment(meta["price"], payment_id, get_setting("heleket_merchant_id"), get_setting("heleket_api_key"))
-        if payment_url:
-            await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой (Heleket)</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard(payment_url))
-            await state.clear()
-        else:
+        try:
+            pay_url = await create_heleket_payment_request(payment_id=payment_id, price=meta["price"], metadata=meta)
+            if pay_url:
+                await smart_edit_message(callback.message, "💎 <b>Оплата криптовалютой (Heleket)</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard("Heleket", pay_url, back_callback="show_profile"), get_setting("payment_image"))
+                await state.clear()
+            else:
+                await callback.message.answer("❌ Ошибка при создании платежа Heleket.")
+        except Exception as e:
+            logger.error(f"traffic_pay_heleket Ошибка: {e}", exc_info=True)
             await callback.message.answer("❌ Ошибка при создании платежа Heleket.")
 
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_tonconnect")
@@ -2664,17 +2684,36 @@ def get_user_router() -> Router:
     @registration_required
     async def traffic_pay_tonconnect(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Создание счета...")
+        wallet = get_setting("ton_wallet_address")
+        if not wallet: return await callback.message.answer("❌ Оплата через TON временно недоступна.")
         payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
         if not payment_id: return
         meta["payment_method"] = "TON Connect"
         create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
         
-        from shop_bot.modules.ton_integration import create_ton_payment
-        price_ton, connect_url = await create_ton_payment(meta["price"], payment_id, get_setting("ton_wallet_address"))
-        if connect_url:
-            await smart_edit_message(callback.message, f"🪙 <b>Оплата через TON Connect</b>\nК оплате: <b>~{price_ton:.2f} TON</b>", keyboards.create_ton_connect_keyboard(connect_url))
+        try:
+            from shop_bot.bot.handlers import get_usdt_rub_rate, get_ton_usdt_rate, _start_ton_connect_process
+            import qrcode
+            from io import BytesIO
+            
+            price_rub = Decimal(str(meta["price"]))
+            rt_usdt, rt_ton = await get_usdt_rub_rate(), await get_ton_usdt_rate()
+            if not rt_usdt or not rt_ton: return await smart_edit_message(callback.message, "❌ Не удалось получить актуальный курс TON.")
+            
+            price_ton = (price_rub / rt_usdt / rt_ton).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+            
+            conn_url = await _start_ton_connect_process(callback.from_user.id, {'messages': [{'address': wallet, 'amount': str(int(price_ton * 10**9)), 'payload': payment_id}], 'valid_until': int(uc.get_msk_time().timestamp()) + 600})
+            
+            bio = BytesIO(); qrcode.make(conn_url).save(bio, "PNG"); bio.seek(0)
+            await callback.message.delete()
+            await callback.message.answer_photo(
+                photo=BufferedInputFile(bio.getvalue(), "ton_qr.png"), 
+                caption=f"🪙 <b>Оплата через TON Connect</b>\n\nСумма: <code>{price_ton}</code> <b>TON</b>\n\n1. На мобильном: нажмите <b>«Открыть кошелек»</b>\n2. На ПК: отсканируйте <b>QR-код</b>\n\nПосле оплаты транзакция подтвердится автоматически.", 
+                reply_markup=keyboards.create_ton_connect_keyboard(conn_url, back_callback="show_profile")
+            )
             await state.clear()
-        else:
+        except Exception as e:
+            logger.error(f"traffic_pay_tonconnect Ошибка: {e}", exc_info=True)
             await callback.message.answer("❌ Ошибка TON Connect.")
 
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_stars")
@@ -2697,45 +2736,36 @@ def get_user_router() -> Router:
             logger.error(f"Stars invoice error: {e}")
             await callback.message.answer("❌ Ошибка отправки инвойса Telegram Stars.")
 
-    @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data == "traffic_pay_yoomoney")
-    @anti_spam
-    @registration_required
-    async def traffic_pay_yoomoney(callback: types.CallbackQuery, state: FSMContext):
-        await callback.answer("⏳ Создание счета...")
-        payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
-        if not payment_id: return
-        meta["payment_method"] = "YooMoney"
-        create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
-        
-        from shop_bot.modules.yoomoney_integration import create_yoomoney_payment
-        payment_url = create_yoomoney_payment(meta["price"], payment_id, "Докупка трафика", get_setting("yoomoney_wallet"))
-        if payment_url:
-            await smart_edit_message(callback.message, "💜 <b>Оплата ЮMoney</b>\nНажмите кнопку ниже:", keyboards.create_yoomoney_payment_keyboard(payment_url, payment_id))
-            await state.clear()
-        else:
-            await callback.message.answer("❌ Ошибка при создании платежа ЮMoney.")
-
     @user_router.callback_query(TrafficPurchaseProcess.waiting_for_confirm, F.data.startswith("traffic_pay_platega"))
     @anti_spam
     @registration_required
     async def traffic_pay_platega(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⏳ Создание счета...")
         method_type = callback.data.replace("traffic_pay_platega", "")
-        if method_type == "_crypto": method_id = "crypto"
-        elif method_type == "_payform": method_id = "payform"
-        else: method_id = "sbp"
+        if method_type == "_crypto": method_id = 13
+        elif method_type == "_payform": method_id = None
+        else: method_id = 2
         
         payment_id, meta = await _create_traffic_draft(state, callback.from_user.id)
         if not payment_id: return
-        meta["payment_method"] = f"Platega ({method_id})"
+        meta["payment_method"] = "Platega"
         create_payload_pending(payment_id, callback.from_user.id, meta["price"], meta)
         
-        from shop_bot.modules.platega_integration import create_platega_payment
-        payment_url = await create_platega_payment(meta["price"], payment_id, "Докупка трафика", get_setting("platega_merchant_id"), get_setting("platega_api_key"), method_id)
-        if payment_url:
-            await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard(payment_url))
-            await state.clear()
-        else:
+        try:
+            merchant_id, api_key = get_setting("platega_merchant_id"), get_setting("platega_api_key")
+            platega = PlategaAPI(merchant_id, api_key)
+            if method_id is None:
+                _, payment_url = await platega.create_payment_payform(amount=float(meta["price"]), description="Докупка трафика", payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}")
+            else:
+                _, payment_url = await platega.create_payment(amount=float(meta["price"]), description="Докупка трафика", payment_id=payment_id, return_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", failed_url=f"https://t.me/{TELEGRAM_BOT_USERNAME}", payment_method=method_id)
+            
+            if payment_url:
+                await smart_edit_message(callback.message, "💳 <b>Оплата через Platega</b>\nНажмите кнопку ниже:", keyboards.create_payment_keyboard("Platega", payment_url, back_callback="show_profile"), get_setting("payment_image"))
+                await state.clear()
+            else:
+                await callback.message.answer("❌ Ошибка при создании платежа Platega.")
+        except Exception as e:
+            logger.error(f"traffic_pay_platega Ошибка: {e}", exc_info=True)
             await callback.message.answer("❌ Ошибка при создании платежа Platega.")
 
     # ===== НАЧАЛО ПЕРЕНОСА КЛЮЧА НА ДРУГОЙ СЕРВЕР =====
